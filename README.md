@@ -40,7 +40,7 @@ The app uses Gemini for AI analysis and supports Firebase-backed storage/auth wi
 
 3. Set required environment variables in `.env.local`:
 
-   - `GEMINI_API_KEY` (required for AI features)
+   - `GEMINI_API_KEY` (required for AI features; this project reads it directly in `src/lib/gemini.ts`)
    - Firebase client vars (optional but recommended):
      - `VITE_FIREBASE_API_KEY`
      - `VITE_FIREBASE_PROJECT_ID`
@@ -57,7 +57,7 @@ The app uses Gemini for AI analysis and supports Firebase-backed storage/auth wi
    npm run dev
    ```
 
-   App runs on `http://localhost:3000`.
+   App runs on `http://localhost:3000` (configured via the `dev` script in `package.json`).
 
 ## Available Scripts
 
