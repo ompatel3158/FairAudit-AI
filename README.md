@@ -57,7 +57,7 @@ The app uses Gemini for AI analysis and supports Firebase-backed storage/auth wi
    npm run dev
    ```
 
-   App runs on `http://localhost:3000` (configured via the `dev` script in `package.json`).
+   App runs on the local URL printed in your terminal after startup.
 
 ## Available Scripts
 
