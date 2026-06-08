@@ -20,7 +20,7 @@ The app uses Gemini for AI analysis and supports Firebase-backed storage/auth wi
 
 ## Prerequisites
 
-- Node.js 18+ (recommended)
+- Node.js 18+ (required)
 - npm
 - Gemini API key
 
@@ -40,7 +40,7 @@ The app uses Gemini for AI analysis and supports Firebase-backed storage/auth wi
 
 3. Set required environment variables in `.env.local`:
 
-   - `GEMINI_API_KEY` (required for AI features; this project reads it directly in `src/lib/gemini.ts`)
+   - `GEMINI_API_KEY` (required for AI features; keep it aligned with `.env.example` and AI Studio runtime configuration)
    - Firebase client vars (optional but recommended):
      - `VITE_FIREBASE_API_KEY`
      - `VITE_FIREBASE_PROJECT_ID`
