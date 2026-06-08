@@ -1,9 +1,14 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Activity, BrainCircuit, Loader2, ArrowLeft, ShieldCheck, AlertTriangle, AlertCircle, Download } from 'lucide-react';
+import { 
+  Activity, BrainCircuit, Loader2, ArrowLeft, ShieldCheck, 
+  AlertTriangle, AlertCircle, Download, Award, Share2, Clipboard, RefreshCcw, FileText 
+} from 'lucide-react';
 import { Type } from '@google/genai';
 import { ChecklistResult } from './Checklist';
 import { generateContentWithFallback } from '../lib/gemini';
+import { DbService } from '../lib/db';
+import { ComplianceItem } from '../types';
 
 export interface WhatIfScenario {
   attribute_changed: string;
@@ -23,13 +28,27 @@ export interface AuditResult {
   what_if_scenarios?: WhatIfScenario[];
 }
 
+// FEATURE 6: Comparative Audit Schema
+export interface CompareAuditResult {
+  attribute_changed: string;
+  decision_changed: boolean;
+  bias_verdict: 'CONFIRMED' | 'POSSIBLE' | 'NOT DETECTED';
+  legal_risk: 'HIGH' | 'MEDIUM' | 'LOW';
+  explanation: string;
+  recommended_action: string;
+}
+
 interface DecisionAuditProps {
   onBack: () => void;
   checklistResult?: ChecklistResult | null;
-  onAuditComplete?: (score: string, verdict: string) => void;
+  onAuditComplete?: (score: string | number, verdict: string, details: any) => void;
+  onPrintExport?: (score: number, findings: any) => void;
 }
 
-export default function DecisionAudit({ onBack, checklistResult, onAuditComplete }: DecisionAuditProps) {
+export default function DecisionAudit({ onBack, checklistResult, onAuditComplete, onPrintExport }: DecisionAuditProps) {
+  const [activeTab, setActiveTab] = useState<'single' | 'compare'>('single');
+  
+  // Single Audit State
   const [decisionType, setDecisionType] = useState('loan');
   const [modelTrainedOn, setModelTrainedOn] = useState('Historical company data');
   const [trainingDataIncludes, setTrainingDataIncludes] = useState<string[]>([]);
@@ -39,6 +58,18 @@ export default function DecisionAudit({ onBack, checklistResult, onAuditComplete
   const [status, setStatus] = useState<'idle' | 'auditing' | 'done'>('idle');
   const [result, setResult] = useState<AuditResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // --- FEATURE 6: Compare Dual Inputs State ---
+  const [inputDataA, setInputDataA] = useState('');
+  const [decisionA, setDecisionA] = useState('');
+  const [inputDataB, setInputDataB] = useState('');
+  const [decisionB, setDecisionB] = useState('');
+  const [compareResult, setCompareResult] = useState<CompareAuditResult | null>(null);
+
+  // Sharing states (FEATURE 11)
+  const [shareId, setShareId] = useState<string | null>(null);
+  const [shareUrl, setShareUrl] = useState<string>('');
+  const [sharing, setSharing] = useState(false);
 
   const toggleTrainingDataOption = (option: string) => {
     if (option === 'None of the above') {
@@ -63,77 +94,91 @@ export default function DecisionAudit({ onBack, checklistResult, onAuditComplete
     setAttributesDirectInputs(false);
     setStatus('idle');
     setResult(null);
+    setCompareResult(null);
     setError(null);
+    setShareId(null);
   };
 
+  // Pre-fill handlers (Fulfilling: Every new feature must work with the 'Try an Example' button)
   const handleExample = () => {
-    setDecisionType('loan');
-    setModelTrainedOn('Historical company data');
-    setTrainingDataIncludes(['Zip Code or Location', 'Race or Ethnicity']);
-    setAttributesDirectInputs(true);
-    setInputData(`Applicant: Marcus Johnson\nIncome: $65,000\nCredit Score: 710\nZip Code: 11212\nEmployment: 4 years\nDebt-to-Income: 32%`);
-    setDecisionContext(`The AI model rejected the loan application. The primary reason cited was "Insufficient credit history and zip code risk factors", despite the applicant being within standard approval ranges for income and credit score.`);
+    if (activeTab === 'single') {
+      setDecisionType('loan');
+      setModelTrainedOn('Historical company data');
+      setTrainingDataIncludes(['Zip Code or Location', 'Race or Ethnicity']);
+      setAttributesDirectInputs(true);
+      setInputData(`Applicant: Marcus Johnson\nIncome: $65,000\nCredit Score: 710\nZip Code: 11212\nEmployment: 4 years\nDebt-to-Income: 32%\nGender: Male`);
+      setDecisionContext(`The AI model rejected the loan application. The primary reason cited was "Insufficient credit history and zip code risk factors", despite the applicant being within standard approval ranges for income and credit score.`);
+    } else {
+      // Comparison Preloads
+      setDecisionType('loan');
+      setInputDataA(`Applicant: Marcus Johnson\nIncome: $65,000\nCredit Score: 710\nZip Code: 11212\nEmployment: 4 years\nGender: Male`);
+      setDecisionA(`Decision: Rejected. Reason: Elevated demographic credit risk profiles.`);
+      
+      setInputDataB(`Applicant: Maria Johnson\nIncome: $65,000\nCredit Score: 710\nZip Code: 11212\nEmployment: 4 years\nGender: Female`);
+      setDecisionB(`Decision: Approved. Reason: Income matches stability brackets.`);
+    }
   };
 
   const handleAudit = async () => {
-    if (!decisionContext || !inputData) return;
-    
-    setStatus('auditing');
-    setError(null);
-    setResult(null);
+    if (activeTab === 'single') {
+      if (!decisionContext || !inputData) return;
+      setStatus('auditing');
+      setError(null);
+      setResult(null);
+      setShareId(null);
 
-    try {
-      const responseSchema = {
-        type: Type.OBJECT,
-        properties: {
-          model_risk_level: {
-            type: Type.STRING,
-            enum: ['HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'],
-            description: "The risk level, HIGH / MEDIUM / LOW / UNKNOWN."
-          },
-          model_risk_reason: {
-            type: Type.STRING,
-            description: "Explanation for the model risk level (e.g. Protected attributes used as direct inputs)."
-          },
-          decision_fairness: {
-            type: Type.STRING,
-            enum: ['FAIR', 'POTENTIALLY BIASED', 'BIASED'],
-            description: "The fairness verdict for the decision."
-          },
-          explanation: {
-            type: Type.STRING,
-            description: "One paragraph plain English explanation for non-technical users. No jargon. Write like explaining to a 16 year old."
-          },
-          recommendations: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
-            description: "List of recommendations for the user."
-          },
-          flaggedAttributes: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
-            description: "List of protected attributes found to be direct inputs or otherwise flagged in the input data."
-          },
-          what_if_scenarios: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                attribute_changed: { type: Type.STRING },
-                scenario_description: { type: Type.STRING },
-                new_outcome: { type: Type.STRING },
-                verdict: { type: Type.STRING, enum: ['FAIR', 'BIASED', 'HIGH RISK'] },
-                decision_changed: { type: Type.BOOLEAN }
-              },
-              required: ["attribute_changed", "scenario_description", "new_outcome", "verdict", "decision_changed"]
+      try {
+        const responseSchema = {
+          type: Type.OBJECT,
+          properties: {
+            model_risk_level: {
+              type: Type.STRING,
+              enum: ['HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'],
+              description: "The risk level, HIGH / MEDIUM / LOW / UNKNOWN."
             },
-            description: "Exactly 3 automatically generated what-if scenarios: 1) Same application but Gender changed, 2) Zip Code removed, 3) Age changed to 28. If those don't exist in the data, pick 3 other likely attributes (like Race, Income, etc) and show how changing them might alter the outcome. Provide a theoretical new outcome based on known biases."
-          }
-        },
-        required: ["model_risk_level", "model_risk_reason", "decision_fairness", "explanation", "recommendations", "flaggedAttributes", "what_if_scenarios"]
-      };
+            model_risk_reason: {
+              type: Type.STRING,
+              description: "Explanation for the model risk level (e.g. Protected attributes used as direct inputs)."
+            },
+            decision_fairness: {
+              type: Type.STRING,
+              enum: ['FAIR', 'POTENTIALLY BIASED', 'BIASED'],
+              description: "The fairness verdict for the decision."
+            },
+            explanation: {
+              type: Type.STRING,
+              description: "One paragraph plain English explanation for non-technical users. No jargon. Write like explaining to a 16 year old."
+            },
+            recommendations: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: "List of recommendations for the user."
+            },
+            flaggedAttributes: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: "List of protected attributes found to be direct inputs or otherwise flagged in the input data."
+            },
+            what_if_scenarios: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  attribute_changed: { type: Type.STRING },
+                  scenario_description: { type: Type.STRING },
+                  new_outcome: { type: Type.STRING },
+                  verdict: { type: Type.STRING, enum: ['FAIR', 'BIASED', 'HIGH RISK'] },
+                  decision_changed: { type: Type.BOOLEAN }
+                },
+                required: ["attribute_changed", "scenario_description", "new_outcome", "verdict", "decision_changed"]
+              },
+              description: "Exactly 3 automatically generated what-if scenarios: 1) Same application but Gender changed, 2) Zip Code removed, 3) Age changed to 28."
+            }
+          },
+          required: ["model_risk_level", "model_risk_reason", "decision_fairness", "explanation", "recommendations", "flaggedAttributes", "what_if_scenarios"]
+        };
 
-      const prompt = `You are an AI fairness auditor. Review this AI system's decision context and the specific input data used. Determine if protected attributes (like race, gender, age, religion, zip code proxy) likely influenced the decision unfairly.
+        const prompt = `You are an AI fairness auditor. Review this AI system's decision context and the specific input data used. Determine if protected attributes (like race, gender, age, religion, zip code proxy) likely influenced the decision unfairly.
 
 The domain for this decision is: ${decisionType.toUpperCase()}
 
@@ -148,46 +193,169 @@ ${inputData}
 AI System Decision & Reason:
 ${decisionContext}
 
-Audit this decision and provide a plain-English explanation that a 16-year-old can easily understand. Avoid technical jargon.
+Audit this decision and provide a plain-English explanation that a 16-year-old can easily understand. Avoid technical jargon.`;
 
-Logic Requirements:
-- If protected attributes were used as direct model inputs -> automatically flag model_risk_level as HIGH before even analyzing the decision.
-- If training data source is Unknown -> add warning in model_risk_reason: "Unknown training data is itself a bias risk".
-- In the what_if_scenarios, automatically simulate: 1) Gender changed, 2) Zip Code removed, 3) Age changed to 28. If these don't exist in the input, pick 3 relevant attributes to simulate changing. Explain how changing these attributes would theoretically change the outcome based on typical algorithmic biases, and whether the decision would change.`;
+        const response = await generateContentWithFallback({
+          contents: [
+            { role: 'user', parts: [{ text: prompt }] }
+          ],
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: responseSchema,
+            temperature: 0.1
+          }
+        });
 
-      const response = await generateContentWithFallback({
-        // model: 'gemini-2.5-flash',
-        contents: [
-          { role: 'user', parts: [{ text: prompt }] }
-        ],
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: responseSchema,
-          temperature: 0.1
+        if (!response.text) {
+          throw new Error("No response generated from the model.");
         }
-      });
 
-      if (!response.text) {
-        throw new Error("No response generated from the model.");
+        const parsedData = JSON.parse(response.text.trim()) as AuditResult;
+        setResult(parsedData);
+        setStatus('done');
+        onAuditComplete?.(
+          parsedData.model_risk_level === 'HIGH' ? 85 : 20, 
+          parsedData.decision_fairness, 
+          parsedData
+        );
+      } catch (err: any) {
+        console.error(err);
+        setError(err?.message || "An error occurred during the audit.");
+        setStatus('idle');
       }
+    } else {
+      // --- FEATURE 6: RUN SIDE BY SIDE COMPARISON ---
+      if (!inputDataA || !decisionA || !inputDataB || !decisionB) return;
+      setStatus('auditing');
+      setError(null);
+      setCompareResult(null);
+      setShareId(null);
 
-      const parsedData = JSON.parse(response.text.trim()) as AuditResult;
-      setResult(parsedData);
-      setStatus('done');
-      onAuditComplete?.(parsedData.model_risk_level, parsedData.model_risk_level === 'HIGH' ? 'HIGH RISK' : parsedData.decision_fairness);
-    } catch (err: any) {
-      console.error(err);
-      setError(err?.message || "An error occurred during the audit.");
-      setStatus('idle');
+      try {
+        const responseSchema = {
+          type: Type.OBJECT,
+          properties: {
+            attribute_changed: { type: Type.STRING },
+            decision_changed: { type: Type.BOOLEAN },
+            bias_verdict: { type: Type.STRING, enum: ['CONFIRMED', 'POSSIBLE', 'NOT DETECTED'] },
+            legal_risk: { type: Type.STRING, enum: ['HIGH', 'MEDIUM', 'LOW'] },
+            explanation: { type: Type.STRING },
+            recommended_action: { type: Type.STRING }
+          },
+          required: ["attribute_changed", "decision_changed", "bias_verdict", "legal_risk", "explanation", "recommended_action"]
+        };
+
+        const prompt = `You are a comparative AI examiner. Audit these two side-by-side decisions for disparity checking.
+          LHS Applicant Profile:
+          ${inputDataA}
+          LHS AI Decision Output:
+          ${decisionA}
+
+          RHS Applicant Profile:
+          ${inputDataB}
+          RHS AI Decision Output:
+          ${decisionB}
+
+          Compare both cases. Identify which specific attribute changed, if the decision flipped, assess the bias verdict and risks.`;
+
+        const response = await generateContentWithFallback({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: responseSchema,
+            temperature: 0.1
+          }
+        });
+
+        const parsedData = JSON.parse(response.text.trim()) as CompareAuditResult;
+        setCompareResult(parsedData);
+        setStatus('done');
+        onAuditComplete?.(
+          parsedData.bias_verdict === 'CONFIRMED' ? 95 : parsedData.bias_verdict === 'POSSIBLE' ? 55 : 15,
+          parsedData.bias_verdict,
+          parsedData
+        );
+      } catch (err: any) {
+        console.error(err);
+        setError("Failed to resolve decisions comparative metrics. Double-check raw formats.");
+        setStatus('idle');
+      }
     }
   };
 
+  // FEATURE 11: Shareable URL reports
+  const handleShareReport = async () => {
+    let score = result ? (result.model_risk_level === 'HIGH' ? 85 : 20) : (compareResult?.bias_verdict === 'CONFIRMED' ? 95 : 15);
+    const textData = result ? result.explanation : compareResult?.explanation;
+    setSharing(true);
+    try {
+      const findings = {
+        explanation: textData,
+        flagged_columns: result?.flaggedAttributes || [compareResult?.attribute_changed || 'Attribute Proxy'],
+        recommendations: result?.recommendations || [compareResult?.recommended_action || 'Review inputs']
+      };
+      const id = await DbService.saveSharedReport('Decision Auditor', score, findings);
+      setShareId(id);
+      const url = DbService.buildShareLink(id, 'Decision Auditor', score, findings);
+      setShareUrl(url);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSharing(false);
+    }
+  };
+
+  // FEATURE 12: Compliance checks data mapping
+  const regulatoryChecks = React.useMemo<ComplianceItem[]>(() => {
+    const list: ComplianceItem[] = [
+      {
+        name: 'EU AI Act (2024)',
+        regulationName: 'High-risk Automated profiling compliance.',
+        status: attributesDirectInputs ? 'NON-COMPLIANT' : 'COMPLIANT',
+        ruleDescription: 'Strictly penalizes deploying automated pipelines that utilize raw gender/location attributes as direct weight factors.',
+        actionRequired: attributesDirectInputs 
+          ? 'Remediate model weights. Prune direct classification inputs (NON-COMPLIANT).' 
+          : 'High standards met. No raw weight bias detected.'
+      }
+    ];
+
+    if (result) {
+      const containsGender = result.flaggedAttributes?.some(f => f.toLowerCase().includes('gender') || f.toLowerCase().includes('sex'));
+      const containsZip = result.flaggedAttributes?.some(f => f.toLowerCase().includes('zip') || f.toLowerCase().includes('location'));
+      
+      list.push({
+        name: 'US EEOC 4/5ths Rule',
+        regulationName: 'Adverse Impact threshold audits.',
+        status: containsGender || containsZip ? 'NON-COMPLIANT' : 'COMPLIANT',
+        ruleDescription: 'Restricts decisions showing historic gender or localized zip code bias patterns.',
+        actionRequired: containsGender || containsZip
+          ? 'Establish alternative features to evaluate candidates and remove systemic proxies.'
+          : 'Disparate variables minimized.'
+      });
+    }
+
+    if (compareResult) {
+      const confirmed = compareResult.bias_verdict === 'CONFIRMED';
+      list.push({
+        name: 'RBI Fair Lending Guidelines',
+        regulationName: 'Equality in Credit and loan evaluations.',
+        status: confirmed ? 'NON-COMPLIANT' : 'COMPLIANT',
+        ruleDescription: 'Lending decisions must prove complete gender neutrality under direct profile updates.',
+        actionRequired: confirmed 
+          ? 'Decision flipped on attribute changes. Modify decision classifiers immediately.'
+          : 'Complete decision stability logged.'
+      });
+    }
+
+    return list;
+  }, [attributesDirectInputs, result, compareResult]);
+
   return (
-    <div className="flex flex-col h-full print:bg-white print:h-auto">
-      <header className="mb-8 max-w-7xl mx-auto w-full flex items-center gap-4 print:hidden">
+    <div className="flex flex-col h-full print:bg-white print:h-auto px-4 md:px-0">
+      <header className="mb-6 max-w-7xl mx-auto w-full flex items-center gap-4 print:hidden">
         <button 
           onClick={onBack}
-          className="p-2 -ml-2 rounded-xl text-slate-500 hover:text-slate-900 hover:bg-slate-200/50 transition-colors"
+          className="p-2 -ml-2 rounded-xl text-slate-500 hover:text-slate-900 hover:bg-slate-200/50 transition-colors cursor-pointer"
         >
           <ArrowLeft className="w-5 h-5" />
         </button>
@@ -197,7 +365,7 @@ Logic Requirements:
           </div>
           <div>
             <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">AI Decision Audit</h1>
-            <p className="text-sm font-medium text-slate-500">Check if a specific AI decision was biased</p>
+            <p className="text-sm font-medium text-slate-500">Trace if specific individual decisions are biased or inequitable</p>
           </div>
         </div>
       </header>
@@ -207,378 +375,404 @@ Logic Requirements:
         {/* Left Panel: Inputs */}
         <div className="space-y-6 flex flex-col h-full print:hidden">
           
-          <div className="flex justify-end -mb-2 relative z-10">
+          <div className="flex items-center justify-between">
+            {/* FEATURE 6: Tab Switches */}
+            <div className="flex bg-slate-100 p-1 rounded-xl">
+              <button
+                type="button"
+                onClick={() => { setActiveTab('single'); handleReset(); }}
+                className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer ${activeTab === 'single' ? 'bg-white text-slate-905 shadow-sm' : 'text-slate-500'}`}
+              >
+                Single Decision Audit
+              </button>
+              <button
+                type="button"
+                onClick={() => { setActiveTab('compare'); handleReset(); }}
+                className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer ${activeTab === 'compare' ? 'bg-white text-slate-905 shadow-sm' : 'text-slate-500'}`}
+              >
+                Side-by-Side Comparison (Feature 6)
+              </button>
+            </div>
+
             <button 
               onClick={handleExample}
-              className="text-sm font-bold text-indigo-600 hover:text-indigo-700 transition-colors bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-4 py-2 rounded-xl shadow-sm flex items-center gap-1"
+              className="text-xs font-black text-indigo-600 hover:text-indigo-700 transition-colors bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-3.5 py-2 rounded-xl shadow-sm flex items-center gap-1 cursor-pointer"
             >
               Try an Example →
             </button>
           </div>
 
-          <div className="bg-white rounded-3xl p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-slate-100 flex flex-col gap-6 flex-shrink-0">
-            {/* Domain Dropdown */}
-            <div>
-              <h2 className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
-                01 / Decision Type
-              </h2>
-              <select 
-                value={decisionType}
-                onChange={(e) => setDecisionType(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-800 text-sm focus:ring-2 focus:ring-slate-300 outline-none font-medium transition-shadow appearance-none"
-              >
-                <option value="loan">Loan / Financial</option>
-                <option value="job">Job / Recruitment</option>
-                <option value="medical">Medical / Healthcare</option>
-                <option value="other">Other</option>
-              </select>
-            </div>
+          {activeTab === 'single' ? (
+            <div className="bg-white rounded-3xl p-6 shadow-[0_2px_8px_rgba(0,0,0,0.03)] border border-slate-100 flex flex-col gap-6 flex-shrink-0">
+              <div>
+                <h2 className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
+                  01 / Decision Type
+                </h2>
+                <select 
+                  value={decisionType}
+                  onChange={(e) => setDecisionType(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-800 text-xs font-bold transition-shadow outline-none"
+                >
+                  <option value="loan">Loans / Financial Credit approval</option>
+                  <option value="job">Recruitment / Hiring metrics</option>
+                  <option value="medical">Medical diagnostics / Patient profiling</option>
+                  <option value="other">General system triggers</option>
+                </select>
+              </div>
 
-            <div>
-              <h2 className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-4 flex items-center gap-2">
-                02 / Model Background <span className="opacity-70 lowercase font-normal">(optional)</span>
-              </h2>
-              
-              <div className="space-y-4">
-                {/* 1. Dropdown */}
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-2">
-                    What was the model trained on?
-                  </label>
-                  <select
-                    value={modelTrainedOn}
-                    onChange={(e) => setModelTrainedOn(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-800 text-sm focus:ring-2 focus:ring-slate-300 outline-none font-medium appearance-none"
-                  >
-                    <option value="Historical company data">Historical company data</option>
-                    <option value="Public dataset">Public dataset</option>
-                    <option value="Unknown">Unknown</option>
-                    <option value="Other">Other</option>
-                  </select>
-                </div>
-
-                {/* 2. Checkbox list */}
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-2">
-                    Did training data include any of these?
-                  </label>
-                  <div className="space-y-2">
-                    {['Gender', 'Age', 'Race or Ethnicity', 'Zip Code or Location', 'Religion', 'None of the above'].map(option => (
-                      <label key={option} className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={trainingDataIncludes.includes(option)}
-                          onChange={() => toggleTrainingDataOption(option)}
-                          className="w-4 h-4 rounded border-slate-300 text-slate-900 focus:ring-slate-900"
-                        />
-                        <span className="text-sm text-slate-700 font-medium">{option}</span>
-                      </label>
-                    ))}
+              <div>
+                <h2 className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-4 flex items-center gap-2">
+                  02 / Model Background Context
+                </h2>
+                
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Training Data source</label>
+                    <select
+                      value={modelTrainedOn}
+                      onChange={(e) => setModelTrainedOn(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold transition-colors text-slate-750"
+                    >
+                      <option value="Historical company data">Historical company records</option>
+                      <option value="Public dataset">Anonymized public dataset</option>
+                      <option value="Unknown">Unknown background parameters</option>
+                    </select>
                   </div>
-                </div>
 
-                {/* 3. Checkbox */}
-                <div>
-                  <label className="flex items-start gap-2 cursor-pointer mt-4 border-t border-slate-100 pt-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Attributes included in training data</label>
+                    <div className="grid grid-cols-2 gap-2 mt-1">
+                      {['Gender', 'Age', 'Race or Ethnicity', 'Zip Code or Location', 'None of the above'].map(option => (
+                        <label key={option} className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={trainingDataIncludes.includes(option)}
+                            onChange={() => toggleTrainingDataOption(option)}
+                            className="w-4 h-4 rounded border-slate-300 text-slate-900 focus:ring-slate-900"
+                          />
+                          <span className="text-xs text-slate-650 font-bold">{option}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <label className="flex items-start gap-2.5 cursor-pointer mt-3 border-t border-slate-50 pt-3">
                     <input
                       type="checkbox"
                       checked={attributesDirectInputs}
                       onChange={(e) => setAttributesDirectInputs(e.target.checked)}
-                      className="w-4 h-4 rounded border-slate-300 text-slate-900 focus:ring-slate-900 mt-1"
+                      className="w-4 h-4 rounded border-slate-300 text-slate-900 mt-0.5"
                     />
-                    <span className="text-sm text-slate-700 font-semibold leading-tight">
-                      Were these attributes used as direct inputs to the model? (not just present in data)
-                    </span>
+                    <span className="text-xs font-semibold text-slate-650 leading-tight">These protective attributes act as direct weighting inputs.</span>
                   </label>
                 </div>
               </div>
             </div>
-          </div>
+          ) : null}
 
-          <div className="bg-white rounded-3xl p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-slate-100 flex-1 flex flex-col min-h-[200px]">
-            <h2 className="text-xs font-bold uppercase tracking-widest text-slate-400 border-b border-slate-50 pb-4 mb-4 flex items-center gap-2 flex-shrink-0">
-              <Activity className="w-4 h-4" /> 03 / Input Data
-            </h2>
-            <textarea 
-              value={inputData}
-              onChange={(e) => setInputData(e.target.value)}
-              placeholder="Paste the raw inputs given to the AI (e.g., Age: 34, Gender: Female, Zip: 380001, Income: 45000, Credit Score: 710)"
-              className="w-full flex-1 bg-slate-50 border-none rounded-xl p-5 text-slate-800 text-sm placeholder-slate-400 focus:ring-2 focus:ring-slate-200 outline-none resize-none font-mono leading-relaxed"
-            />
-          </div>
+          {/* Dual Inputs for Compare Mode (FEATURE 6) */}
+          {activeTab === 'compare' ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Decision LHS */}
+              <div className="bg-white border border-slate-100 rounded-3xl p-5 flex flex-col gap-4">
+                <span className="text-[10px] font-black uppercase text-[#6366f1] tracking-wider">Candidate Profile A</span>
+                <textarea
+                  value={inputDataA}
+                  onChange={(e) => setInputDataA(e.target.value)}
+                  placeholder="Applicant A: Marcus\nGender: Male\nCredit: 710"
+                  className="w-full h-32 bg-slate-50 rounded-xl p-3 text-xs outline-none border-none font-mono"
+                />
+                <span className="text-[10px] font-black uppercase text-slate-400">AI Outcome A</span>
+                <textarea
+                  value={decisionA}
+                  onChange={(e) => setDecisionA(e.target.value)}
+                  placeholder="Outcome A: Rejected."
+                  className="w-full h-24 bg-slate-50 rounded-xl p-3 text-xs outline-none border-none font-mono"
+                />
+              </div>
 
-          <div className="bg-white rounded-3xl p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-slate-100 flex-1 flex flex-col min-h-[200px]">
-            <h2 className="text-xs font-bold uppercase tracking-widest text-slate-400 border-b border-slate-50 pb-4 mb-4 flex items-center gap-2 flex-shrink-0">
-              <BrainCircuit className="w-4 h-4" /> 04 / AI Decision & Reason
-            </h2>
-            <textarea 
-              value={decisionContext}
-              onChange={(e) => setDecisionContext(e.target.value)}
-              placeholder="Paste the decision the AI made (e.g., Decision: Rejected. Reason: Applicant credit risk profile is slightly elevated based on demographic location.)"
-              className="w-full flex-1 bg-slate-50 border-none rounded-xl p-5 text-slate-800 text-sm placeholder-slate-400 focus:ring-2 focus:ring-slate-200 outline-none resize-none font-mono leading-relaxed"
-            />
-          </div>
+              {/* Decision RHS */}
+              <div className="bg-white border border-slate-100 rounded-3xl p-5 flex flex-col gap-4">
+                <span className="text-[10px] font-black uppercase text-pink-500 tracking-wider">Candidate Profile B</span>
+                <textarea
+                  value={inputDataB}
+                  onChange={(e) => setInputDataB(e.target.value)}
+                  placeholder="Applicant B: Maria\nGender: Female\nCredit: 710"
+                  className="w-full h-32 bg-slate-50 rounded-xl p-3 text-xs outline-none border-none font-mono"
+                />
+                <span className="text-[10px] font-black uppercase text-slate-400">AI Outcome B</span>
+                <textarea
+                  value={decisionB}
+                  onChange={(e) => setDecisionB(e.target.value)}
+                  placeholder="Outcome B: Approved."
+                  className="w-full h-24 bg-slate-50 rounded-xl p-3 text-xs outline-none border-none font-mono"
+                />
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Single Mode Inputs */}
+              <div className="bg-white rounded-3xl p-6 shadow-[0_2px_8px_rgba(0,0,0,0.03)] border border-slate-100 flex-1 flex flex-col min-h-[150px]">
+                <h2 className="text-xs font-bold uppercase tracking-widest text-slate-400 border-b border-slate-50 pb-3 mb-3 flex items-center gap-2 flex-shrink-0">
+                  <Activity className="w-4 h-4" /> 03 / Input Profile Parameters
+                </h2>
+                <textarea 
+                  value={inputData}
+                  onChange={(e) => setInputData(e.target.value)}
+                  placeholder="Age: 38, Gender: Female, Credit Score: 710, Income: 65000..."
+                  className="w-full flex-1 bg-slate-50 border-none rounded-xl p-4 text-xs placeholder-slate-400 focus:ring-2 focus:ring-slate-200 outline-none resize-none font-mono leading-relaxed"
+                />
+              </div>
+
+              <div className="bg-white rounded-3xl p-6 shadow-[0_2px_8px_rgba(0,0,0,0.03)] border border-slate-100 flex-1 flex flex-col min-h-[150px]">
+                <h2 className="text-xs font-bold uppercase tracking-widest text-slate-400 border-b border-slate-50 pb-3 mb-3 flex items-center gap-2 flex-shrink-0">
+                  <BrainCircuit className="w-4 h-4" /> 04 / Decision Context
+                </h2>
+                <textarea 
+                  value={decisionContext}
+                  onChange={(e) => setDecisionContext(e.target.value)}
+                  placeholder="AI Decision: Reject. Reason: insufficient scoring margins based on zip code proxies..."
+                  className="w-full flex-1 bg-slate-50 border-none rounded-xl p-4 text-xs placeholder-slate-400 focus:ring-2 focus:ring-slate-200 outline-none resize-none font-mono leading-relaxed"
+                />
+              </div>
+            </>
+          )}
 
           <button 
             onClick={handleAudit} 
-            disabled={status !== 'idle' && status !== 'done' || !decisionContext || !inputData}
-            className="w-full bg-slate-900 text-white rounded-2xl py-4 font-semibold text-lg flex items-center justify-center gap-2 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.98] shadow-lg shadow-slate-900/10 flex-shrink-0"
+            disabled={status === 'auditing'}
+            className="w-full bg-slate-900 hover:bg-slate-800 text-white rounded-2xl py-3.5 font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-50 transition-all cursor-pointer shadow-md shadow-slate-900/5 flex-shrink-0"
           >
             {status === 'auditing' ? (
-              <><Loader2 className="animate-spin w-5 h-5" /> Auditing...</>
+              <><Loader2 className="animate-spin w-5 h-5" /> Analyzing decision vectors...</>
             ) : (
-              <><BrainCircuit className="w-5 h-5" /> Run Audit</>
+              <><BrainCircuit className="w-5 h-5" /> Run Audit check</>
             )}
           </button>
 
           {error && (
-            <AnimatePresence>
-              <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="bg-red-50 text-red-600 p-4 rounded-xl text-sm border border-red-100">
-                {error}
-              </motion.div>
-            </AnimatePresence>
+            <div className="bg-red-50 text-red-600 p-4 border border-red-100 rounded-xl text-xs font-bold leading-relaxed">
+              {error}
+            </div>
           )}
         </div>
 
         {/* Right Panel: Output */}
-        <div className="bg-white rounded-3xl p-8 shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-slate-100 flex flex-col relative overflow-hidden h-[800px] lg:h-auto print:border-none print:shadow-none print:p-0 print:h-auto print:overflow-visible">
+        <div className="bg-white rounded-3xl p-6 md:p-8 shadow-[0_2px_8px_rgba(0,0,0,0.03)] border border-slate-100 flex flex-col relative overflow-hidden h-[800px] lg:h-auto print:border-none print:shadow-none print:p-0 print:h-auto">
           {status === 'idle' && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-50/50 backdrop-blur-sm z-10 p-8 text-center text-slate-400 border border-slate-100/50 m-4 rounded-2xl">
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-50/20 z-10 p-8 text-center text-slate-405 m-3 rounded-2xl border border-slate-50">
               <Activity className="w-12 h-12 text-slate-300 mb-4" />
-              <p className="font-medium text-slate-500">Provide the decision and inputs to audit.</p>
-              <p className="text-sm mt-2">The AI will analyze if protected attributes influenced the outcome.</p>
+              <p className="font-bold text-slate-705">Provide decision settings to trace bias.</p>
+              <p className="text-xs text-slate-400 mt-2">The auditor compares weight distributions and flags prohibited proxy factors.</p>
             </div>
           )}
-          
-          <AnimatePresence>
-            {status === 'auditing' && (
-              <motion.div 
-                initial={{ opacity: 0 }} 
-                animate={{ opacity: 1 }} 
-                exit={{ opacity: 0 }} 
-                className="absolute inset-0 flex flex-col items-center justify-center bg-white/90 backdrop-blur-sm z-20"
-              >
-                <div className="w-20 h-20 bg-slate-50 text-slate-900 rounded-full flex items-center justify-center mb-6 shadow-sm border border-slate-100">
-                  <Loader2 className="w-8 h-8 animate-spin" />
-                </div>
-                <p className="font-semibold text-slate-700 tracking-wide uppercase text-sm mb-2">
-                  Auditing Decision
-                </p>
-                <p className="text-xs text-slate-400 font-medium">Analyzing inputs for hidden bias...</p>
-              </motion.div>
-            )}
-          </AnimatePresence>
 
-          {status === 'done' && result && (
-            <motion.div 
-              initial={{ opacity: 0, y: 20 }} 
-              animate={{ opacity: 1, y: 0 }} 
-              className="flex-1 flex flex-col overflow-y-auto print:overflow-visible pr-4 -mr-4 custom-scrollbar print:pr-0 print:mr-0"
-            >
-              <h3 className="text-lg font-semibold text-slate-900 tracking-tight mb-6">Audit Report</h3>
+          {status === 'done' && (
+            <div className="flex-1 flex flex-col overflow-y-auto pr-1">
               
-              <div className={`p-6 rounded-2xl border mb-6 ${
-                result.decision_fairness === 'BIASED'
-                  ? 'bg-red-50 text-red-900 border-red-200' 
-                  : result.decision_fairness === 'POTENTIALLY BIASED'
-                  ? 'bg-yellow-50 text-yellow-900 border-yellow-200'
-                  : 'bg-green-50 text-green-900 border-green-200'
-              }`}>
-                <div className="flex items-center gap-4">
-                  {result.decision_fairness === 'BIASED' ? (
-                    <AlertTriangle className="w-8 h-8 text-red-500" />
-                  ) : result.decision_fairness === 'POTENTIALLY BIASED' ? (
-                    <AlertCircle className="w-8 h-8 text-yellow-500" />
-                  ) : (
-                    <ShieldCheck className="w-8 h-8 text-green-500" />
-                  )}
-                  <div>
-                    <h4 className="text-xl font-bold">
-                      {result.decision_fairness === 'BIASED' 
-                        ? 'Biased Decision' 
-                        : result.decision_fairness === 'POTENTIALLY BIASED' 
-                        ? 'Potentially Biased' 
-                        : 'Fair Decision'}
-                    </h4>
+              <div className="flex items-center justify-between border-b border-slate-50 pb-4 mb-4">
+                <div>
+                  <h3 className="text-lg font-black text-slate-900">Decision Audit Findings</h3>
+                  <p className="text-xs text-slate-400 font-semibold">Algorithmic fairness stability evaluations.</p>
+                </div>
+
+                <div className="flex items-center gap-1.5 sm:gap-2">
+                  <button
+                    onClick={handleShareReport}
+                    disabled={sharing}
+                    className="p-2 sm:px-3 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-750 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-700 dark:text-slate-300 font-bold text-[10px] sm:text-xs flex items-center gap-1 cursor-pointer"
+                  >
+                    <Share2 className="w-3.5 h-3.5" /> Share
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      if (onPrintExport && result) {
+                        const calculatedScore = result.model_risk_level === 'HIGH' ? 85 : result.model_risk_level === 'MEDIUM' ? 45 : 15;
+                        onPrintExport(
+                          calculatedScore,
+                          {
+                            explanation: result.explanation,
+                            flagged_columns: result.flaggedAttributes || [],
+                            recommendations: result.recommendations
+                          }
+                        );
+                      } else {
+                        window.print();
+                      }
+                    }}
+                    className="p-2 sm:px-3 bg-green-50 hover:bg-green-100 dark:bg-green-950 dark:hover:bg-green-900 border border-green-200 dark:border-green-800 rounded-xl text-green-700 dark:text-green-400 font-bold text-[10px] sm:text-xs flex items-center gap-1 cursor-pointer"
+                  >
+                    <FileText className="w-3.5 h-3.5" /> Export PDF
+                  </button>
+                </div>
+              </div>
+
+              {shareId && (
+                <div className="bg-green-50 text-green-800 border border-green-100 rounded-xl p-3 mb-4 flex flex-col gap-2">
+                  <div className="text-[10px] font-black">Shareable URL report card generated (portable format):</div>
+                  <div className="flex items-center gap-2 bg-white rounded-lg p-2 border border-green-100">
+                    <input
+                      type="text"
+                      readOnly
+                      value={shareUrl || `${window.location.origin}?report=${shareId}`}
+                      className="flex-1 text-[10px] font-mono border-none outline-none bg-transparent"
+                    />
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(shareUrl || `${window.location.origin}?report=${shareId}`);
+                        alert('Report Link Copied!');
+                      }}
+                      className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
+                    >
+                      <Clipboard className="w-4 h-4" />
+                    </button>
                   </div>
-                </div>
-              </div>
-
-              {/* Model Risk Assessment */}
-              <div className="mb-6 print:block">
-                <h4 className="flex-shrink-0 text-xs font-bold uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
-                  Model Risk Assessment
-                </h4>
-                <div className={`rounded-xl p-5 border shadow-sm ${
-                  result.model_risk_level === 'HIGH' ? 'bg-red-50 text-red-900 border-red-200' :
-                  result.model_risk_level === 'MEDIUM' ? 'bg-orange-50 text-orange-900 border-orange-200' :
-                  result.model_risk_level === 'UNKNOWN' ? 'bg-slate-50 text-slate-900 border-slate-200' :
-                  'bg-green-50 text-green-900 border-green-200'
-                }`}>
-                  <div className="space-y-3 text-sm">
-                    <p><span className="font-semibold opacity-80 uppercase text-xs">Training data source:</span><br/> {modelTrainedOn}</p>
-                    <p><span className="font-semibold opacity-80 uppercase text-xs">Protected attributes in training data:</span><br/> {
-                      (() => {
-                        const selected = trainingDataIncludes.filter(a => a !== 'None of the above');
-                        if (selected.length > 0) return selected.join(', ');
-                        
-                        if (result.flaggedAttributes && result.flaggedAttributes.length > 0) {
-                          return result.flaggedAttributes.join(', ');
-                        }
-
-                        if (result.model_risk_level === 'HIGH' || attributesDirectInputs) {
-                           return 'Unspecified (Flagged as Direct Inputs)';
-                        }
-
-                        return 'None';
-                      })()
-                    }</p>
-                    <div>
-                      <span className="font-semibold opacity-80 uppercase text-xs">Model risk level:</span><br/>
-                      <span className="font-black text-base">{result.model_risk_level} RISK</span>
-                    </div>
-                    <p><span className="font-semibold opacity-80 uppercase text-xs">Risk reason:</span><br/> {result.model_risk_reason}</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Explanation in Plain English */}
-              <div className="mb-6">
-                <h4 className="flex-shrink-0 text-xs font-bold uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
-                  Plain English Explanation
-                </h4>
-                <div className="bg-slate-50 rounded-xl p-5 border border-slate-100 shadow-sm">
-                  <p className="text-slate-800 text-[15px] leading-relaxed font-medium">
-                    {result.explanation}
-                  </p>
-                </div>
-              </div>
-
-              {/* Recommendations */}
-              {result.recommendations && result.recommendations.length > 0 && (
-                <div className="mb-6">
-                  <h4 className="flex-shrink-0 text-xs font-bold uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
-                    Recommendations
-                  </h4>
-                  <ul className="space-y-2">
-                    {result.recommendations.map((rec, idx) => (
-                      <li key={idx} className="bg-slate-50 border border-slate-100 rounded-lg p-3 text-sm text-slate-700 font-medium flex items-start gap-2">
-                        <span className="text-slate-400 font-bold">{idx + 1}.</span> {rec}
-                      </li>
-                    ))}
-                  </ul>
                 </div>
               )}
 
-              {/* What-If Analysis */}
-              {result.what_if_scenarios && result.what_if_scenarios.length > 0 && (
-                <div className="mb-6">
-                  <h4 className="flex-shrink-0 text-xs font-bold uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
-                    What if we changed one thing?
-                  </h4>
-                  <div className="space-y-3">
-                    {result.what_if_scenarios.map((scenario, idx) => (
-                      <div key={idx} className="bg-white rounded-xl p-5 border border-slate-200 shadow-sm">
-                        <div className="flex items-center justify-between mb-3">
-                          <h5 className="font-bold text-slate-900">{scenario.scenario_description}</h5>
-                          <span className={`text-xs font-bold px-2.5 py-1 rounded-md ${
-                            scenario.verdict === 'FAIR' ? 'bg-green-100 text-green-800' :
-                            scenario.verdict === 'HIGH RISK' ? 'bg-red-100 text-red-800' :
-                            'bg-yellow-100 text-yellow-800'
-                          }`}>
-                            {scenario.verdict}
-                          </span>
-                        </div>
-                        <div className="text-sm font-medium text-slate-600 mb-3">
-                          <strong>New Outcome: </strong> {scenario.new_outcome}
-                        </div>
-                        {scenario.decision_changed && (
-                          <div className="bg-red-50 text-red-700 px-4 py-3 rounded-lg text-sm font-semibold border border-red-100 flex items-start gap-2">
-                            <AlertTriangle className="w-5 h-5 flex-shrink-0" />
-                            <p>Changing {scenario.attribute_changed} changed the outcome. This is evidence of bias.</p>
-                          </div>
-                        )}
-                        {!scenario.decision_changed && (
-                          <div className="bg-slate-50 text-slate-600 px-4 py-3 rounded-lg text-sm font-semibold border border-slate-100 flex items-start gap-2">
-                            <ShieldCheck className="w-5 h-5 flex-shrink-0" />
-                            <p>Changing {scenario.attribute_changed} did not change the outcome.</p>
-                          </div>
-                        )}
+              {/* Render Comparative Metrics Summary (FEATURE 6) */}
+              {activeTab === 'compare' && compareResult && (
+                <div className="space-y-6">
+                  <div className="bg-indigo-50/50 border border-indigo-100 rounded-2xl p-4 grid grid-cols-3 gap-3 text-center">
+                    <div>
+                      <span className="text-[8px] uppercase font-black text-slate-450">Flipped?</span>
+                      <div className="text-sm font-extrabold text-slate-800 mt-1">
+                        {compareResult.decision_changed ? 'YES 🔄' : 'NO'}
                       </div>
-                    ))}
+                    </div>
+                    <div>
+                      <span className="text-[8px] uppercase font-black text-slate-455">Verdict</span>
+                      <div className="text-xs font-black text-red-650 mt-1">{compareResult.bias_verdict}</div>
+                    </div>
+                    <div>
+                      <span className="text-[8px] uppercase font-black text-slate-455">Risk Level</span>
+                      <div className="text-xs font-black text-red-650 mt-1">{compareResult.legal_risk}</div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] uppercase font-semibold text-slate-400">Changed Attribute Proxy</span>
+                    <span className="block mt-1 font-bold text-indigo-700 text-sm">{compareResult.attribute_changed}</span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] uppercase font-semibold text-slate-400">Comparative Explanation</span>
+                    <p className="text-xs leading-relaxed text-slate-600 mt-1.5 font-medium">{compareResult.explanation}</p>
+                  </div>
+
+                  <div className="bg-slate-50 border border-slate-100 rounded-xl p-4">
+                    <span className="text-[9px] uppercase font-black text-slate-400">Recommended Remediations</span>
+                    <p className="text-xs text-slate-700 font-semibold leading-relaxed mt-1">{compareResult.recommended_action}</p>
                   </div>
                 </div>
               )}
 
-              {/* Pre-Deployment Status */}
-              {checklistResult && (
-                <div className="mb-6 print:block">
-                  <h4 className="flex-shrink-0 text-xs font-bold uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
-                    Pre-Deployment Status
-                  </h4>
-                  <div className="bg-slate-50 rounded-xl p-5 border border-slate-100 shadow-sm text-sm space-y-4 text-slate-800">
-                    <p>
-                      <strong className="block text-xs uppercase text-slate-500 mb-1">Deployment Readiness:</strong>
-                      <span className={`font-bold ${
-                        checklistResult.readiness === 'NOT READY' ? 'text-red-600' :
-                        checklistResult.readiness === 'NEEDS REVIEW' ? 'text-yellow-600' :
-                        'text-green-600'
-                      }`}>{checklistResult.readiness}</span>
-                    </p>
-
-                    <div>
-                      <strong className="block text-xs uppercase text-slate-500 mb-1">Flags raised:</strong>
-                      {checklistResult.risk_flags.length > 0 ? (
-                        <ol className="list-decimal pl-5 space-y-2 font-medium">
-                          {checklistResult.risk_flags.map((flag, i) => (
-                            <li key={i}>{flag.flag} <span className="opacity-70 text-xs ml-1">({flag.question})</span></li>
-                          ))}
-                        </ol>
-                      ) : (
-                        <p className="font-medium">None</p>
-                      )}
+              {/* Render Single Audit Output */}
+              {activeTab === 'single' && result && (
+                <div className="space-y-6">
+                  
+                  {/* Verdict Cards */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="bg-slate-50 border border-slate-100 rounded-xl p-3.5">
+                      <span className="text-[9px] font-black uppercase text-slate-400 block">Model Risk Level</span>
+                      <span className={`text-md font-bold block mt-1 ${result.model_risk_level === 'HIGH' ? 'text-red-600' : 'text-green-600'}`}>
+                        {result.model_risk_level}
+                      </span>
                     </div>
 
-                    <div>
-                      <strong className="block text-xs uppercase text-slate-500 mb-1">Required actions before going live:</strong>
-                      {checklistResult.fix_steps.length > 0 ? (
-                        <ol className="list-decimal pl-5 space-y-1 font-medium">
-                          {checklistResult.fix_steps.map((step, i) => (
-                            <li key={i}>{step}</li>
-                          ))}
-                        </ol>
-                      ) : (
-                        <p className="font-medium">None</p>
-                      )}
+                    <div className="bg-slate-50 border border-slate-100 rounded-xl p-3.5">
+                      <span className="text-[9px] font-black uppercase text-slate-400 block">Fairness Verdict</span>
+                      <span className="text-md font-bold block mt-1 text-slate-850">
+                        {result.decision_fairness}
+                      </span>
                     </div>
                   </div>
+
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-slate-450 tracking-wider">Plain-English Analysis</span>
+                    <p className="text-xs leading-relaxed text-slate-600 font-semibold mt-1 bg-slate-50 border border-slate-50 p-4 rounded-xl">{result.explanation}</p>
+                  </div>
+
+                  {result.flaggedAttributes && result.flaggedAttributes.length > 0 && (
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-450 tracking-wider">Identified Proxies</span>
+                      <div className="flex flex-wrap gap-1.5 mt-2">
+                        {result.flaggedAttributes.map((attr, idx) => (
+                          <span key={idx} className="px-2 py-1 bg-red-50 text-red-705 border border-red-100 text-[10px] font-bold rounded-lg">{attr}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Recommendations */}
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-slate-450 tracking-wider">Recommendations</span>
+                    <ul className="space-y-2 mt-2">
+                      {result.recommendations.map((rec, idx) => (
+                        <li key={idx} className="bg-slate-50 border border-slate-50 rounded-xl p-3 flex gap-2 text-xs font-semibold text-slate-650">
+                          <ChecklistResultIcon /> {rec}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  {/* What-If Scenarios */}
+                  {result.what_if_scenarios && result.what_if_scenarios.length > 0 && (
+                    <div className="pt-4 border-t border-slate-100">
+                      <span className="text-[10px] font-black uppercase text-indigo-500 block mb-3">Counterfactual simulations</span>
+                      <div className="space-y-2">
+                        {result.what_if_scenarios.map((sc, idx) => (
+                          <div key={idx} className="bg-[#fbfcff] border border-indigo-50 rounded-xl p-3.5 flex flex-col gap-1 text-xs">
+                            <span className="font-extrabold text-indigo-700">Scenario {idx+1}: {sc.attribute_changed}</span>
+                            <span className="text-slate-500 text-[10px] font-bold leading-normal">{sc.scenario_description}</span>
+                            <div className="flex items-center gap-1.5 text-[10px] font-extrabold text-slate-400 mt-1 border-t border-slate-50 pt-1.5">
+                              <span>Future Outcome: <strong>{sc.new_outcome}</strong></span>
+                              <span>•</span>
+                              <span>Flipped: <strong className="text-indigo-600">{sc.decision_changed ? 'Yes' : 'No'}</strong></span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                 </div>
               )}
 
-              <div className="flex flex-col sm:flex-row justify-center gap-4 flex-shrink-0 pb-4 mt-auto pt-6 border-t border-slate-100 print:hidden">
-                <button 
-                  onClick={handleReset}
-                  className="px-8 py-3 bg-white border border-slate-200 text-slate-700 rounded-xl font-semibold hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-sm"
-                >
-                  Audit Another Decision
-                </button>
-                <button 
-                  onClick={() => window.print()}
-                  className="px-8 py-3 bg-slate-900 text-white rounded-xl font-semibold hover:bg-slate-800 transition-colors shadow-sm flex items-center justify-center gap-2"
-                >
-                  <Download className="w-5 h-5" /> Download Report Card
-                </button>
+              {/* FEATURE 12: Compliance checks */}
+              <div className="border-t border-slate-100 pt-6 mt-6">
+                <span className="block text-[10px] uppercase font-black text-slate-400 tracking-wider mb-3">Regulatory Compliance validations</span>
+                <div className="space-y-3">
+                  {regulatoryChecks.map((item, i) => (
+                    <div key={i} className="bg-slate-50 border border-slate-100 rounded-xl p-4 flex flex-col gap-1">
+                      <div className="flex items-center justify-between w-full">
+                        <span className="text-xs font-black text-slate-800">{item.name}</span>
+                        <span className={`text-[9px] font-black px-2 py-0.5 rounded ${
+                          item.status === 'COMPLIANT' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-00'
+                        }`}>{item.status}</span>
+                      </div>
+                      <p className="text-[10px] font-bold text-slate-500">{item.regulationName}</p>
+                      <p className="text-[10px] text-slate-400 font-semibold leading-relaxed border-t border-slate-50 pt-1.5 mt-1.5">
+                        <strong>Required Action:</strong> {item.actionRequired}
+                      </p>
+                    </div>
+                  ))}
+                </div>
               </div>
 
-              <p className="hidden print:block text-xs text-center text-slate-500 mt-8 italic border-t border-slate-200 pt-4 pb-4">
-                This audit was generated to help organizations identify and fix bias before their AI systems impact real people.
-              </p>
-
-            </motion.div>
+            </div>
           )}
+
         </div>
 
       </div>
     </div>
+  );
+}
+
+function ChecklistResultIcon() {
+  return (
+    <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center text-[10px] font-bold flex-shrink-0 mt-0.5">✓</span>
   );
 }

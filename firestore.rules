@@ -1,0 +1,21 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global safety net catch-all deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Timeline history rule: allow list/read and write for any user
+    match /timeline/{entryId} {
+      allow read, create: if true;
+      allow update, delete: if false;
+    }
+
+    // 3. Shared reports documents: retrieved by public unique 6-char hashes
+    match /shared_reports/{reportId} {
+      allow get, create: if true;
+      allow list, update, delete: if false;
+    }
+  }
+}

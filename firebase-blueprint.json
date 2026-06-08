@@ -1,0 +1,40 @@
+{
+  "entities": {
+    "TimelineEntry": {
+      "title": "TimelineEntry",
+      "description": "Historical alignment trends tracking algorithmic scoring for specific projects over time.",
+      "type": "object",
+      "properties": {
+        "projectName": { "type": "string", "description": "The custom business track name of the audited workspace." },
+        "date": { "type": "string", "description": "The formatted text statement of completion date." },
+        "timestamp": { "type": "number", "description": "The unix epoch recording timestamp." },
+        "biasScore": { "type": "number", "description": "The calculated numeric bias assessment score." },
+        "module": { "type": "string", "description": "The visual suite tab context used." }
+      },
+      "required": ["projectName", "date", "timestamp", "biasScore", "module"]
+    },
+    "SharedReport": {
+      "title": "SharedReport",
+      "description": "Public compliance reports shared and saved in the cloud.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "6-character alphanumeric reference id." },
+        "timestamp": { "type": "string", "description": "Date of general logging." },
+        "module": { "type": "string", "description": "Type of target audits conducted." },
+        "biasScore": { "type": "number", "description": "The quantitative risk ranking." },
+        "findings": { "type": "string", "description": "The JSON-stringified findings contents." }
+      },
+      "required": ["id", "timestamp", "module", "biasScore", "findings"]
+    }
+  },
+  "firestore": {
+    "timeline/{entryId}": {
+      "schema": "TimelineEntry",
+      "description": "Chronological audit trends list."
+    },
+    "shared_reports/{reportId}": {
+      "schema": "SharedReport",
+      "description": "Independently accessed certificates index."
+    }
+  }
+}

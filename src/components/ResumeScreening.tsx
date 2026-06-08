@@ -19,9 +19,10 @@ interface Candidate {
 interface ResumeScreeningProps {
   onBack: () => void;
   onAuditComplete?: (score: number, verdict: string) => void;
+  onPrintExport?: (score: number, findings: any) => void;
 }
 
-export default function ResumeScreening({ onBack, onAuditComplete }: ResumeScreeningProps) {
+export default function ResumeScreening({ onBack, onAuditComplete, onPrintExport }: ResumeScreeningProps) {
   const [jobDescription, setJobDescription] = useState('');
   const [candidates, setCandidates] = useState<Candidate[]>([
     { id: '1', label: 'Candidate A', file: null, status: 'idle' }
@@ -41,7 +42,7 @@ export default function ResumeScreening({ onBack, onAuditComplete }: ResumeScree
   const handleAddResume = () => {
     if (candidates.length >= 5) return;
     const newLabel = getNextLabel(candidates.map(c => c.label));
-    setCandidates([...candidates, { id: Date.now().toString(), label: newLabel, file: null, status: 'idle' }]);
+    setCandidates([...candidates, { id: Date.now().toString() + '_' + Math.random().toString(36).substring(2, 11), label: newLabel, file: null, status: 'idle' }]);
   };
 
   const handleRemoveResume = (id: string) => {
@@ -53,7 +54,7 @@ export default function ResumeScreening({ onBack, onAuditComplete }: ResumeScree
   };
 
   const handleReset = () => {
-    setCandidates([{ id: Date.now().toString(), label: 'Candidate A', file: null, status: 'idle' }]);
+    setCandidates([{ id: Date.now().toString() + '_' + Math.random().toString(36).substring(2, 11), label: 'Candidate A', file: null, status: 'idle' }]);
     setJobDescription('');
     setBatchStatus('idle');
     setExpandedCandidate(null);
@@ -485,8 +486,22 @@ export default function ResumeScreening({ onBack, onAuditComplete }: ResumeScree
                     Start New Batch
                   </button>
                   <button 
-                    onClick={() => window.print()}
-                    className="px-8 py-3 bg-slate-900 text-white rounded-xl font-semibold hover:bg-slate-800 transition-colors shadow-sm flex items-center justify-center gap-2"
+                    onClick={() => {
+                      if (onPrintExport && rankedCandidates.length > 0) {
+                        const topCandidate = rankedCandidates[0];
+                        onPrintExport(
+                          topCandidate.score || 0,
+                          {
+                            explanation: `Anonymized resume audit for candidates applying to job: ${jobDescription}. Candidates screened: ${rankedCandidates.map(c => `${c.label} (${c.score}%)`).join(', ')}.`,
+                            flagged_columns: ["Candidate Identity Attributes Eliminated"],
+                            recommendations: rankedCandidates.map(c => `${c.label}: ${c.reasoning ? c.reasoning.substring(0, 85) + '...' : 'No details available'}`)
+                          }
+                        );
+                      } else {
+                        window.print();
+                      }
+                    }}
+                    className="px-8 py-3 bg-slate-900 text-white rounded-xl font-semibold hover:bg-slate-800 transition-colors shadow-sm flex items-center justify-center gap-2 pointer-events-auto"
                   >
                     <FileText className="w-5 h-5" /> Print Overview
                   </button>

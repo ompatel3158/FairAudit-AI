@@ -53,16 +53,16 @@ export default function LandingPage({ onSelectModule }: LandingPageProps) {
         
         <div 
           onClick={() => onSelectModule('checklist')}
-          className="max-w-2xl mx-auto bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 p-[1px] rounded-2xl cursor-pointer hover:shadow-lg transition-shadow group"
+          className="max-w-2xl mx-auto bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 dark:from-slate-800 dark:via-slate-800 dark:to-slate-800 p-[1px] rounded-2xl cursor-pointer hover:shadow-lg dark:hover:shadow-none transition-shadow group"
         >
-          <div className="bg-white rounded-[15px] px-6 py-4 flex items-center justify-between">
+          <div className="bg-white dark:bg-slate-900 rounded-[15px] px-6 py-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600">
+              <div className="w-10 h-10 bg-indigo-50 dark:bg-slate-800 rounded-xl flex items-center justify-center text-indigo-600 dark:text-indigo-400">
                 <ShieldCheck className="w-5 h-5" />
               </div>
-              <span className="font-bold text-slate-900 text-sm sm:text-base">Going live soon? Run a free pre-deployment bias check</span>
+              <span className="font-bold text-slate-900 dark:text-slate-100 text-sm sm:text-base">Going live soon? Run a free pre-deployment bias check</span>
             </div>
-            <ArrowRight className="w-5 h-5 text-indigo-500 group-hover:translate-x-1 transition-transform" />
+            <ArrowRight className="w-5 h-5 text-indigo-500 dark:text-indigo-400 group-hover:translate-x-1 transition-transform" />
           </div>
         </div>
       </div>

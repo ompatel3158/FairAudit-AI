@@ -1,18 +1,96 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;705&family=JetBrains+Mono:wght@400;500;600&display=swap');
 @import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
   --font-sans: "Inter", -apple-system, system-ui, sans-serif;
+  --font-display: "Space Grotesk", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
 }
 
 body {
   background-color: #f8fafc; /* Very light slate */
   color: #0f172a; /* Dark slate */
   font-family: var(--font-sans);
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+/* Custom styles for dark mode */
+.dark body {
+  background-color: #000000 !important; /* Pitch Black background */
+  color: #ffffff !important; /* Pristine White text */
+}
+
+/* Force dark property mapping to restrict to 3 color groups (White text, Gray borders/details, Black canvas) */
+.dark {
+  --color-slate-50: #111111;
+  --color-slate-100: #e2e8f0;
+  --color-slate-200: #cbd5e1;
+  --color-slate-350: #94a3b8;
+  --color-slate-450: #64748b;
+  --color-slate-500: #64748b;
+  --color-slate-700: #94a3b8;
+  --color-slate-800: #1e1e1e;
+  --color-slate-850: #121212;
+  --color-slate-900: #0a0a0a;
+  --color-slate-905: #000000;
+  --color-slate-910: #000000;
+  --color-slate-950: #000000;
+  
+  --color-zinc-50: #111111;
+  --color-zinc-100: #e2e8f0;
+  --color-zinc-500: #64748b;
+  --color-zinc-800: #1e1e1e;
+  --color-zinc-900: #121212;
+  --color-zinc-950: #000000;
+  
+  --color-neutral-500: #64748b;
+  --color-neutral-800: #1e1e1e;
+  --color-neutral-900: #121212;
+  --color-neutral-950: #000000;
+}
+
+/* Print Specific Rules for High-Quality PDF Exports */
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  
+  .print-hidden,
+  header,
+  footer,
+  aside,
+  button,
+  form,
+  .no-print {
+    display: none !important;
+  }
+  
+  .print-block,
+  .print-only {
+    display: block !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+
+  .print-card {
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 12px !important;
+    padding: 24px !important;
+    background: white !important;
+    color: black !important;
+    page-break-inside: avoid;
+  }
 }
 
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
+  height: 6px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-track {
@@ -26,4 +104,244 @@ body {
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background-color: #94a3b8;
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: #1e293b;
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: #334155;
+}
+
+/* Additional smooth motion fixes */
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* --- AIS FOCUS MODE INJECTED STYLES --- */
+
+/* Globally remove box shadows in dark mode */
+.dark, .dark * {
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) {
+  background-color: #0a0a0a !important;
+  border-color: #1e1e1e !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(2) {
+  background-color: #0a0a0a !important;
+  border-color: #1e1e1e !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(3) > div:nth-of-type(1) {
+  background-color: #000000 !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(3) {
+  background-color: #0a0a0a !important;
+  border-color: #1e1e1e !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(3) > div:nth-of-type(1) {
+  background-color: #0a0a0a !important;
+  border-color: #1e1e1e !important;
+  border-width: 0.8px !important;
+  color: #ffffff !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(1) {
+  background-color: #000000 !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(2) > div:nth-of-type(1) {
+  background-color: #000000 !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(3) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) {
+  background-color: #000000 !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) {
+  background-color: #000000 !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) {
+  background-color: #0a0a0a !important;
+  border-color: #1e1e1e !important;
+  border-width: 1.8px !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(1) > h1:nth-of-type(1) {
+  color: #ffffff !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > button:nth-of-type(1) {
+  color: #94a3b8 !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > p:nth-of-type(2) {
+  color: #cecece !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > p:nth-of-type(1) {
+  color: #cecece !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > h2:nth-of-type(1) {
+  color: #ffffff !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(2) > h2:nth-of-type(1) {
+  color: #ffffff !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(2) > p:nth-of-type(1) {
+  color: #cecece !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(2) > p:nth-of-type(2) {
+  color: #cecece !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(3) > p:nth-of-type(1) {
+  color: #cecece !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(3) > p:nth-of-type(2) {
+  color: #cecece !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(3) > h2:nth-of-type(1) {
+  color: #ffffff !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(3) {
+  background-color: #212121 !important;
+}
+
+/* New Focus Mode Selection Additions */
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(3) > div:nth-of-type(2) > div:nth-of-type(1) > button:nth-of-type(1) {
+  background-color: #212121 !important;
+}
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > button:nth-of-type(2) {
+  background-color: #212121 !important;
+}
+
+/* Selector 16 styled correctly */
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(3) > div:nth-of-type(1) > div:nth-of-type(1) > select:nth-of-type(1) {
+  background-color: #0a0a0a !important;
+  border-color: #1e1e1e !important;
+}
+
+/* Selector for dark-mode only container */
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(4) > div:nth-of-type(2) > div:nth-of-type(3) > div:nth-of-type(1) > div:nth-of-type(1) {
+  background-color: #000000 !important;
+}
+
+/* Selector for dark mode AI chat message bubble/container (all assistant messages) */
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(4) > div:nth-of-type(2) > div:nth-of-type(3) .justify-start > div {
+  background-color: #000000 !important;
+}
+
+/* Style selected elements for dark mode only */
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) {
+  background-color: #0a0a0a !important;
+  border-color: #1e1e1e !important;
+}
+
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(2) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(1) {
+  background-color: #2b2b2b !important;
+  color: #ffffff !important;
+}
+
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) {
+  background-color: #2b2b2b !important;
+  color: #ffffff !important;
+}
+
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(3) {
+  background-color: #0a0a0a !important;
+  border-color: #1e1e1e !important;
+}
+
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > button:nth-of-type(1) {
+  border-color: #1e1e1e !important;
+  border-width: 0.8px !important;
+}
+
+.dark div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > button:nth-of-type(1) {
+  background-color: #0a0a0a !important;
+}
+
+/* ========================================================
+   GLOBAL COMPREHENSIVE DARK MODE OVERRIDES
+   ======================================================== */
+
+/* Candidate Index Circle Badge (A, B, C, D...) inside Resume Screening list */
+.dark .rounded-full.bg-slate-100 {
+  background-color: #2b2b2b !important;
+  color: #ffffff !important;
+}
+
+/* 1. Global text and content always pristine white in dark mode */
+.dark h1, .dark h2, .dark h3, .dark h4, .dark h5, .dark h6,
+.dark p, .dark span, .dark label, .dark div, .dark strong, 
+.dark a, .dark li, .dark textarea, .dark input, .dark select {
+  color: #ffffff !important;
+}
+
+/* 2. Global SVG icons always pristine white in dark mode */
+.dark svg,
+.dark svg * {
+  stroke: #ffffff !important;
+  color: #ffffff !important;
+}
+
+/* 3. Icon background wrappers always 2b2b2b across every module */
+.dark .w-6:has(svg), .dark .h-6:has(svg),
+.dark .w-8:has(svg), .dark .h-8:has(svg),
+.dark .w-10:has(svg), .dark .h-10:has(svg),
+.dark .w-12:has(svg), .dark .h-12:has(svg),
+.dark .w-14:has(svg), .dark .h-14:has(svg),
+.dark .w-16:has(svg), .dark .h-16:has(svg),
+.dark .w-20:has(svg), .dark .h-20:has(svg),
+.dark .w-12.h-12:has(svg),
+.dark .w-10.h-10:has(svg),
+.dark .w-8.h-8:has(svg),
+.dark .w-20.h-20:has(svg),
+.dark div:has(> svg:only-child),
+.dark span:has(> svg:only-child) {
+  background-color: #2b2b2b !important;
+}
+
+/* 4. Ensure every card and panel container across all modules has 0a0a0a bg & 1e1e1e border of size 0.8px in dark mode */
+.dark div.bg-white,
+.dark section.bg-white,
+.dark form.bg-white,
+.dark article.bg-white,
+.dark div.rounded-3xl,
+.dark section.rounded-3xl,
+.dark div.rounded-2xl,
+.dark section.rounded-2xl,
+.dark div.rounded-xl,
+.dark section.rounded-xl,
+.dark div.border,
+.dark section.border,
+.dark form.border,
+.dark [class*="bg-indigo-50"],
+.dark [class*="bg-slate-50"] {
+  background-color: #0a0a0a !important;
+  border-color: #1e1e1e !important;
+  border-width: 0.8px !important;
+}
+
+/* 5. Custom upload widgets / "Add Another Resume" slots and borders styled as dark elements */
+.dark label[for^="file-upload-"],
+.dark label[htmlFor^="file-upload-"],
+.dark .border-dashed,
+.dark [class*="border-dashed"] {
+  background-color: #0a0a0a !important;
+  border-color: #1e1e1e !important;
+  border-width: 0.8px !important;
+  color: #ffffff !important;
+}
+
+/* Ensure inputs, selects under dark mode have exact values */
+.dark textarea,
+.dark input,
+.dark select {
+  background-color: #000000 !important;
+  border-color: #1e1e1e !important;
+  border-width: 0.8px !important;
+}
+
+div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) {
+  background-color: #555df0 !important;
 }
