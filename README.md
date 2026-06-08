@@ -40,7 +40,7 @@ The app uses Gemini for AI analysis and supports Firebase-backed storage/auth wi
 
 3. Set required environment variables in `.env.local`:
 
-   - `GEMINI_API_KEY` (required for AI features; keep it aligned with `.env.example` and AI Studio runtime configuration)
+   - `GEMINI_API_KEY` (required for AI features; use this exact key name as defined in `.env.example`)
    - Firebase client vars (optional but recommended):
      - `VITE_FIREBASE_API_KEY`
      - `VITE_FIREBASE_PROJECT_ID`
