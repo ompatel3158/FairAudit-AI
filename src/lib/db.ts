@@ -2,16 +2,36 @@ import { initializeApp, getApp, getApps } from 'firebase/app';
 import { getFirestore, doc, setDoc, getDoc, collection, addDoc, getDocs, query, orderBy } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
-// Detect if config is placeholder or active real config
-const isRealFirebase = firebaseConfig && firebaseConfig.apiKey && firebaseConfig.apiKey !== 'placeholder-api-key';
+// Loader preferring environment variables to keep keys secure, or falling back to the JSON configuration
+const getFirebaseConfig = () => {
+  const metaEnv = (import.meta as any).env || {};
+  const envConfig = {
+    projectId: metaEnv.VITE_FIREBASE_PROJECT_ID,
+    appId: metaEnv.VITE_FIREBASE_APP_ID,
+    apiKey: metaEnv.VITE_FIREBASE_API_KEY,
+    authDomain: metaEnv.VITE_FIREBASE_AUTH_DOMAIN,
+    firestoreDatabaseId: metaEnv.VITE_FIREBASE_DATABASE_ID,
+    storageBucket: metaEnv.VITE_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: metaEnv.VITE_FIREBASE_MESSAGING_SENDER_ID,
+    measurementId: metaEnv.VITE_FIREBASE_MEASUREMENT_ID,
+  };
+
+  if (envConfig.apiKey && envConfig.apiKey !== 'placeholder-api-key') {
+    return envConfig;
+  }
+  return firebaseConfig;
+};
+
+const activeConfig = getFirebaseConfig();
+const isRealFirebase = activeConfig && activeConfig.apiKey && activeConfig.apiKey !== 'regular-placeholder' && activeConfig.apiKey !== 'placeholder-api-key' && activeConfig.apiKey !== '';
 
 let db: any = null;
 
 if (isRealFirebase) {
   try {
-    const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+    const app = getApps().length === 0 ? initializeApp(activeConfig) : getApp();
     db = getFirestore(app);
-    console.log('Firebase Firestore initialized successfully.');
+    console.log('Firebase Firestore initialized successfully via secure config.');
   } catch (err) {
     console.warn('Firebase failed to initialize, using localStorage fallback:', err);
   }
