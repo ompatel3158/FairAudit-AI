@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ShieldAlert, CheckCircle2, ArrowLeft, Loader2, ArrowRight, XCircle, Download } from 'lucide-react';
-import { Type } from '@google/genai';
+import { Type } from '../lib/gemini';
 import { generateContentWithFallback } from '../lib/gemini';
 
 const questions = [

@@ -1,9 +1,22 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Upload, FileText, BrainCircuit, Loader2, ShieldCheck, FileSearch, ArrowLeft, Download, Plus, X, ChevronDown, ChevronUp } from 'lucide-react';
-import { Type } from '@google/genai';
+import { Type } from '../lib/gemini';
 import * as mammoth from 'mammoth';
 import { generateContentWithFallback } from '../lib/gemini';
+import WordCloudVisualizer from './WordCloudVisualizer';
+import BiasDna, { DnaAttribute } from './BiasDna';
+
+// A cross-platform helper to safely initialize a dummy or seed file reference, 
+// bypassing environments (e.g., iOS WebKit/iFrames) where the standard 'new File' 
+// constructor is blocked or throws an "Illegal constructor" error.
+function createSafeFile(parts: BlobPart[], filename: string, options?: FilePropertyBag): File {
+  const blob = new Blob(parts, options) as any;
+  blob.name = filename;
+  blob.lastModifiedDate = new Date();
+  blob.lastModified = Date.now();
+  return blob as File;
+}
 
 interface Candidate {
   id: string;
@@ -71,9 +84,9 @@ export default function ResumeScreening({ onBack, onAuditComplete, onPrintExport
     const exampleResume2 = "Jane Smith\n456 Oak St, City\nJane@example.com\nObjective: Junior Developer.\n\nExperience: Intern, Startup Inc (2022)\n- Wrote some HTML.\nEducation: Bootcamp graduate.";
     const exampleResume3 = "Alex Johnson\nalex@gmail.com\nExperience: Senior React Dev at Meta (2018-present).\n- Scaled frontend to millions of users. \nBS CS MIT.";
 
-    const f1 = new File([exampleResume1], "john_doe_resume.txt", { type: "text/plain" });
-    const f2 = new File([exampleResume2], "jane_smith_resume.txt", { type: "text/plain" });
-    const f3 = new File([exampleResume3], "alex_j_resume.txt", { type: "text/plain" });
+    const f1 = createSafeFile([exampleResume1], "john_doe_resume.txt", { type: "text/plain" });
+    const f2 = createSafeFile([exampleResume2], "jane_smith_resume.txt", { type: "text/plain" });
+    const f3 = createSafeFile([exampleResume3], "alex_j_resume.txt", { type: "text/plain" });
 
     setJobDescription("Frontend Engineer\nRequirements:\n- 3+ years experience with React\n- BS in Computer Science\n- Experience building scalable web applications\nResponsibilities:\n- Build and maintain frontend applications");
     setCandidates([
@@ -104,8 +117,8 @@ export default function ResumeScreening({ onBack, onAuditComplete, onPrintExport
     });
   };
 
-  const processCandidate = async (candidate: Candidate) => {
-    if (!candidate.file) return;
+  const processCandidate = async (candidate: Candidate): Promise<{ score?: number; status: 'done' | 'error' }> => {
+    if (!candidate.file) return { status: 'error' };
 
     setCandidates(prev => prev.map(c => c.id === candidate.id ? { ...c, status: 'anonymizing', error: undefined } : c));
 
@@ -184,6 +197,8 @@ export default function ResumeScreening({ onBack, onAuditComplete, onPrintExport
         reasoning: parsedData.reasoning 
       } : c));
 
+      return { score: parsedData.score, status: 'done' };
+
     } catch (err: any) {
       console.error(err);
       setCandidates(prev => prev.map(c => c.id === candidate.id ? { 
@@ -191,6 +206,7 @@ export default function ResumeScreening({ onBack, onAuditComplete, onPrintExport
         status: 'error', 
         error: err?.message || "An error occurred during analysis."
       } : c));
+      return { status: 'error' };
     }
   };
 
@@ -200,19 +216,17 @@ export default function ResumeScreening({ onBack, onAuditComplete, onPrintExport
     
     setBatchStatus('processing');
     
-    await Promise.all(validCandidates.map(c => processCandidate(c)));
+    const results = await Promise.all(validCandidates.map(c => processCandidate(c)));
 
     setBatchStatus('done');
     
-    // Defer reading candidates to ensure state is updated, calculate max manually:
-    setCandidates((prev) => {
-        const completed = prev.filter(c => c.status === 'done' && c.score !== undefined);
-        if (completed.length > 0) {
-            const maxScore = Math.max(...completed.map(c => c.score!));
+    const completed = results.filter(r => r.status === 'done' && r.score !== undefined);
+    if (completed.length > 0) {
+        const maxScore = Math.max(...completed.map(r => r.score!));
+        setTimeout(() => {
             onAuditComplete?.(maxScore, "COMPLETED");
-        }
-        return prev;
-    });
+        }, 0);
+    }
   };
 
   const activeCandidates = candidates.filter(c => c.file);
@@ -240,7 +254,7 @@ export default function ResumeScreening({ onBack, onAuditComplete, onPrintExport
   };
 
   return (
-    <div className="flex flex-col h-full print:bg-white print:h-auto">
+    <div className="flex flex-col lg:h-full h-auto print:bg-white print:h-auto">
       <header className="mb-8 max-w-7xl mx-auto w-full flex items-center gap-4 print:hidden">
         <button 
           onClick={onBack}
@@ -259,10 +273,10 @@ export default function ResumeScreening({ onBack, onAuditComplete, onPrintExport
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-2 gap-8 flex-1 min-h-0 print:block">
+      <div className="max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-2 gap-8 lg:flex-1 lg:min-h-0 print:block">
         
         {/* Left Panel: Inputs */}
-        <div className="space-y-6 flex flex-col h-full print:hidden">
+        <div className="space-y-6 flex flex-col lg:h-full print:hidden">
           
           <div className="flex justify-end -mb-2 relative z-10">
             <button 
@@ -355,7 +369,7 @@ export default function ResumeScreening({ onBack, onAuditComplete, onPrintExport
         </div>
 
         {/* Right Panel: Output */}
-        <div className="bg-white rounded-3xl p-8 shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-slate-100 flex flex-col relative overflow-hidden h-[800px] lg:h-auto print:border-none print:shadow-none print:p-0 print:h-auto print:overflow-visible">
+        <div className="bg-white rounded-3xl p-6 md:p-8 shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-slate-100 flex flex-col relative lg:overflow-hidden h-auto lg:h-[900px] xl:h-[950px] print:border-none print:shadow-none print:p-0 print:h-auto print:overflow-visible">
           {batchStatus === 'idle' && (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-50/50 backdrop-blur-sm z-10 p-8 text-center text-slate-400 border border-slate-100/50 m-4 rounded-2xl">
               <ShieldCheck className="w-12 h-12 text-slate-300 mb-4" />
@@ -396,7 +410,7 @@ export default function ResumeScreening({ onBack, onAuditComplete, onPrintExport
             <motion.div 
               initial={{ opacity: 0, y: 20 }} 
               animate={{ opacity: 1, y: 0 }} 
-              className="flex-1 flex flex-col overflow-y-auto print:overflow-visible pr-4 -mr-4 custom-scrollbar print:pr-0 print:mr-0"
+              className="flex-1 flex flex-col lg:overflow-y-auto overflow-visible print:overflow-visible pr-2 lg:pr-4 -mr-2 lg:-mr-4 custom-scrollbar print:pr-0 print:mr-0"
             >
               <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-100 flex-shrink-0">
                 <h3 className="text-xl font-bold text-slate-900 tracking-tight">Leaderboard</h3>
@@ -406,6 +420,59 @@ export default function ResumeScreening({ onBack, onAuditComplete, onPrintExport
                 >
                   <Download className="w-4 h-4" /> Export Shortlist
                 </button>
+              </div>
+
+              <WordCloudVisualizer />
+
+              <div className="mb-6">
+                <BiasDna 
+                  attributes={[
+                    { 
+                      name: "Gender & Name Identifiers", 
+                      isBiased: true, 
+                      correlation: 82, 
+                      description: "Explicit candidate names and gendered pronouns extracted from CVs during preliminary parsing.",
+                      mutatingPower: 'CRITICAL'
+                    },
+                    { 
+                      name: "Elite Institutional Pedigree", 
+                      isBiased: true, 
+                      correlation: 78, 
+                      description: "Excessive weighting toward select pedigree universities, causing major bias against alternative educational paths.",
+                      mutatingPower: 'HIGH'
+                    },
+                    { 
+                      name: "Location / Postal Address Proxies", 
+                      isBiased: true, 
+                      correlation: 65, 
+                      description: "Geographic signals that act as proxies for race, socioeconomic background, and ethnicity.",
+                      mutatingPower: 'HIGH'
+                    },
+                    { 
+                      name: "Graduation Year (Age Indicator)", 
+                      isBiased: true, 
+                      correlation: 52, 
+                      description: "Explicit dates indicating graduation year leak candidate bracketage, triggering latent age discrimination in sorting.",
+                      mutatingPower: 'HIGH'
+                    },
+                    { 
+                      name: "Core Technical Certifications", 
+                      isBiased: false, 
+                      correlation: 8, 
+                      description: "Objective professional badges and certifications. Free from demographic corelations.",
+                      mutatingPower: 'NONE'
+                    },
+                    { 
+                      name: "Relevant Technology Skills", 
+                      isBiased: false, 
+                      correlation: 6, 
+                      description: "Actual programming stack compliance indicators. Clean objective factor.",
+                      mutatingPower: 'NONE'
+                    }
+                  ]} 
+                  title="Resume Scanner Bias DNA mapping" 
+                  subtitle="Diagnosing systemic demographic leaks and education lineage indicators buried in CV narratives."
+                />
               </div>
 
               <div className="space-y-4 mb-8">

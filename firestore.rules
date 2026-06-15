@@ -6,16 +6,36 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // 2. Timeline history rule: allow list/read and write for any user
+    // 2. Timeline history rule: allow reading, creating, and deleting for any user
     match /timeline/{entryId} {
-      allow read, create: if true;
-      allow update, delete: if false;
+      allow read, write: if true;
     }
 
     // 3. Shared reports documents: retrieved by public unique 6-char hashes
     match /shared_reports/{reportId} {
       allow get, create: if true;
       allow list, update, delete: if false;
+    }
+
+    // 4. Public anonymized industry audits for the global leaderboard
+    match /public_audits/{auditId} {
+      allow read, create: if true;
+      allow update, delete: if false;
+    }
+
+    // 5. REST API keys configuration
+    match /api_keys/{keyId} {
+      allow read, write: if true;
+    }
+
+    // 6. External webhook notification registrations
+    match /webhooks/{webhookId} {
+      allow read, write: if true;
+    }
+
+    // 7. Enterprise application connectors configuration
+    match /enterprise_configs/{configId} {
+      allow read, write: if true;
     }
   }
 }

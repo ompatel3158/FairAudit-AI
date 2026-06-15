@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "FairAudit AI — Bias Detector",
+  "version": "1.0",
+  "description": "Detect AI bias on any webpage instantly and screen for systemic design risks",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [{
+    "matches": ["<all_urls>"],
+    "js": ["content.js"]
+  }]
+}

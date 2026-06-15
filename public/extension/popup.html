@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>FairAudit AI — Bias Detector</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Header -->
+  <header class="app-header">
+    <div class="logo-container">
+      <div class="logo-icon">✨</div>
+      <div class="logo-text">
+        <span class="logo-sub">ENTERPRISE</span>
+        <span class="logo-main">FairAudit AI</span>
+      </div>
+    </div>
+    <span class="badge">v1.0</span>
+  </header>
+
+  <main class="app-content">
+    <!-- Page Type Detection Alert Banner -->
+    <div id="page-alert" class="alert-banner">
+      <span id="alert-icon">🌐</span>
+      <div class="alert-details">
+        <strong id="alert-title">Detecting page...</strong>
+        <span id="alert-desc">Analyzing content structures.</span>
+      </div>
+    </div>
+
+    <!-- Section 1: Quick Audit -->
+    <section class="section-card">
+      <button id="audit-btn" class="primary-btn">
+        <span class="btn-icon">🔍</span>
+        <span class="btn-text">Audit This Page</span>
+      </button>
+
+      <!-- Analyzing loader state -->
+      <div id="audit-loading" class="loader-container hidden">
+        <div class="spinner"></div>
+        <p>Scanning text & running AI bias tests...</p>
+      </div>
+
+      <!-- Result state -->
+      <div id="audit-result" class="result-box hidden">
+        <div class="score-row">
+          <div class="speedometer-container">
+            <svg class="gauge" viewBox="0 0 100 50">
+              <path class="gauge-bg" d="M 10,45 A 35,35 0 0,1 90,45" fill="none" stroke-width="8"></path>
+              <path id="gauge-fill" class="gauge-fill" d="M 10,45 A 35,35 0 0,1 90,45" fill="none" stroke-width="8" stroke-dasharray="125" stroke-dashoffset="125"></path>
+            </svg>
+            <div class="score-display">
+              <span id="score-num" class="score-num">0</span>
+              <span class="score-label">BIAS SCORE</span>
+            </div>
+          </div>
+          <div class="verdict-container">
+            <span id="verdict-badge" class="badge-verdict">LOW RISK</span>
+            <p id="verdict-reason">No sensitive proxy patterns detected on this active page.</p>
+          </div>
+        </div>
+
+        <div class="flagged-box">
+          <h6>🚨 Sensitive Identifiers Flagged:</h6>
+          <div id="flagged-list" class="flag-tags">
+            <!-- Dynamically populated -->
+          </div>
+        </div>
+
+        <a id="report-link" href="#" target="_blank" class="secondary-btn">
+          <span>📋 View Full Report</span>
+          <span class="report-id-text">View Certificate</span>
+        </a>
+      </div>
+    </section>
+
+    <!-- Section 3: Settings Collapsible -->
+    <section class="settings-card">
+      <details>
+        <summary class="settings-summary">
+          <span>⚙️ Extension Settings</span>
+          <span class="caret">▼</span>
+        </summary>
+        <div class="settings-content">
+          <div class="input-group">
+            <label for="api-key-input">Developer API Key</label>
+            <input type="password" id="api-key-input" placeholder="fa_abc123... (or blank for demo)">
+          </div>
+
+          <div class="toggle-group">
+            <div class="toggle-labels">
+              <strong>Check Highlights</strong>
+              <span>Highlight biased text directly on webpage</span>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="highlight-toggle" checked>
+              <span class="slider round"></span>
+            </label>
+          </div>
+        </div>
+      </details>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <span>FairAudit AI Suite © 2026. Made with Gemini API & Node.js</span>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

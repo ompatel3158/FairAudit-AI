@@ -10,7 +10,7 @@ import {
   User as FirebaseUser
 } from 'firebase/auth';
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import firebaseConfig from '../firebase-applet-config.json';
+import firebaseConfig from '../../firebase-applet-config.json';
 
 // Loader preferring environment variables to keep keys secure, or falling back to the JSON configuration
 const getFirebaseConfig = () => {

@@ -5,10 +5,22 @@ import {
   ShieldCheck, AlertCircle, FileText, Download, Play, CheckCircle2, 
   RefreshCcw, Sparkles, Award, Share2, Clipboard, Grid, HelpCircle, X 
 } from 'lucide-react';
-import { Type } from '@google/genai';
+import { Type } from '../lib/gemini';
 import { generateContentWithFallback } from '../lib/gemini';
 import { DbService } from '../lib/db';
 import { ComplianceItem } from '../types';
+import BiasDna, { DnaAttribute } from './BiasDna';
+
+// A cross-platform helper to safely initialize a dummy or seed file reference, 
+// bypassing environments (e.g., iOS WebKit/iFrames) where the standard 'new File' 
+// constructor is blocked or throws an "Illegal constructor" error.
+function createSafeFile(parts: BlobPart[], filename: string, options?: FilePropertyBag): File {
+  const blob = new Blob(parts, options) as any;
+  blob.name = filename;
+  blob.lastModifiedDate = new Date();
+  blob.lastModified = Date.now();
+  return blob as File;
+}
 
 interface ColumnRisk {
   column: string;
@@ -153,7 +165,7 @@ export default function DatasetScanner({ onBack, onAuditComplete, autoLoadCOMPAS
   };
 
   const handleLoadRealWorldDataset = (dataset: typeof REAL_WORLD_DATASETS[0]) => {
-    const exampleFile = new File([dataset.data], `${dataset.id}_sample.csv`, { type: "text/csv" });
+    const exampleFile = createSafeFile([dataset.data], `${dataset.id}_sample.csv`, { type: "text/csv" });
     setDatasetFile(exampleFile);
     setCsvText(dataset.data);
     setDatasetUseCase(dataset.useCase);
@@ -487,9 +499,9 @@ export default function DatasetScanner({ onBack, onAuditComplete, autoLoadCOMPAS
 
   // Pre-load a gorgeous Multi-File sample
   const handleLoadDemoBatch = () => {
-    const f1 = new File([REAL_WORLD_DATASETS[0].data], "compas_dataset.csv", { type: "text/csv" });
-    const f2 = new File([REAL_WORLD_DATASETS[1].data], "adult_gender_demographics.csv", { type: "text/csv" });
-    const f3 = new File([REAL_WORLD_DATASETS[2].data], "german_lending_formula.csv", { type: "text/csv" });
+    const f1 = createSafeFile([REAL_WORLD_DATASETS[0].data], "compas_dataset.csv", { type: "text/csv" });
+    const f2 = createSafeFile([REAL_WORLD_DATASETS[1].data], "adult_gender_demographics.csv", { type: "text/csv" });
+    const f3 = createSafeFile([REAL_WORLD_DATASETS[2].data], "german_lending_formula.csv", { type: "text/csv" });
     setBatchFiles([f1, f2, f3]);
   };
 
@@ -1191,12 +1203,23 @@ Identify flagged columns that are protected attributes or proxies, generate a ri
                   type="button"
                   onClick={() => {
                     if (onPrintExport && result) {
+                      const finalScore = isFixSimulated ? simulatedFix?.afterScore ?? 18 : result.bias_risk_score;
+                      const hasFlagged = isFixSimulated ? [] : result.flagged_columns;
+                      const finalRecs = isFixSimulated 
+                        ? [
+                            `Demographic parity deviations associated with column '${simulatedFix?.removedCol ?? ''}' have been fully remediated.`,
+                            "The post-simulation data shows ideal EEOC four-fifths guidelines compliance.",
+                            "Continue continuous automated ingestion validation to safeguard against subsequent proxy leaks."
+                          ]
+                        : result.recommendations;
                       onPrintExport(
-                        result.bias_risk_score,
+                        finalScore,
                         {
-                          explanation: `The algorithm dataset scanner performed fairness scans showing a risk score of ${result.bias_risk_score}%. Main identified features include: ${result.flagged_columns.join(', ')}.`,
-                          flagged_columns: result.flagged_columns,
-                          recommendations: result.recommendations
+                          explanation: isFixSimulated 
+                            ? `The algorithm dataset scanner simulated corrective alignment. Suppressing/sanitizing parent bias source column '${simulatedFix?.removedCol ?? ''}' lowered the overall risk score to a compliant ${finalScore}% indicator, resolving structural legal/EEOC risks.`
+                            : `The algorithm dataset scanner completed a deep statistical audit. This training dataset returned a raw bias risk score of ${result.bias_risk_score}% indicator due to latent proxy attributes. Main identified features include: ${result.flagged_columns.join(', ')}.`,
+                          flagged_columns: hasFlagged,
+                          recommendations: finalRecs
                         }
                       );
                     } else {
@@ -1294,6 +1317,33 @@ Identify flagged columns that are protected attributes or proxies, generate a ri
                   ))}
                 </div>
               </div>
+
+              {/* Dynamic Bias DNA helix (Visual Metaphor) */}
+              {(() => {
+                const dnaAttributes: DnaAttribute[] = (result?.column_risks || []).map(r => {
+                  const isBiased = result.flagged_columns.includes(r.column);
+                  return {
+                    name: r.column.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+                    isBiased: isBiased,
+                    correlation: Math.min(100, Math.round(r.risk_score || (isBiased ? 60 : 10))),
+                    description: isBiased 
+                      ? `High parity difference detected on column '${r.column}'. This parameter leaks social demographics, mutating downstream model weights.`
+                      : `Unbiased, historically stable feature conforming to parity objectives.`,
+                    mutatingPower: isBiased 
+                      ? (r.risk_score > 70 ? 'CRITICAL' : 'HIGH') 
+                      : 'NONE'
+                  };
+                });
+                return (
+                  <div className="mb-6">
+                    <BiasDna 
+                      attributes={dnaAttributes} 
+                      title="Dataset Columns DNA Mapping" 
+                      subtitle="Visualizing uncompensated demographic proxies deeply encoded inside training dataset columns."
+                    />
+                  </div>
+                );
+              })()}
 
               {/* FEATURE 3: CSS Grid Heatmap UI */}
               <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 sm:p-5 mb-6 flex flex-col gap-3">

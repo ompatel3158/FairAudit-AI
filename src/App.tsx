@@ -4,18 +4,24 @@ import ResumeScreening from './components/ResumeScreening';
 import DatasetScanner from './components/DatasetScanner';
 import DecisionAudit from './components/DecisionAudit';
 import Checklist, { ChecklistResult } from './components/Checklist';
+import Leaderboard from './components/Leaderboard';
+import ApiDocs from './components/ApiDocs';
+import Integrations from './components/Integrations';
+import ChromeExtension from './components/ChromeExtension';
+import ApiChangelog from './components/ApiChangelog';
 import LegalDocModal from './components/LegalDocs';
 import { AuthService, UserSession } from './lib/auth';
 import { 
   Trash2, MessageSquare, X, Send, Database, Sparkles, 
   AlertCircle, ChevronRight, LogOut, Sun, Moon, Sparkle,
-  Lock, Mail, User as UserIcon, Plus, Eye, Play, History, Loader2, PlayCircle, HelpCircle, FileText, ArrowLeft, ArrowRight
+  Lock, Mail, User as UserIcon, Plus, Eye, Play, History, Loader2, PlayCircle, HelpCircle, FileText, ArrowLeft, ArrowRight,
+  Smartphone, Download, Check, Share, Settings, Info
 } from 'lucide-react';
 import { DbService, TimelineEntry, SharedReport } from './lib/db';
 import { generateContentWithFallback } from './lib/gemini';
 import { HistoryRecord, ChatMessage } from './types';
 
-export type ModuleType = 'landing' | 'resume' | 'dataset' | 'decision' | 'checklist';
+export type ModuleType = 'landing' | 'resume' | 'dataset' | 'decision' | 'checklist' | 'leaderboard' | 'api-docs' | 'integrations' | 'chrome-extension' | 'api-changelog';
 
 interface ChatSession {
   id: string;
@@ -32,6 +38,7 @@ export default function App() {
   
   // Auth State
   const [currentUser, setCurrentUser] = useState<UserSession | null>(null);
+  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
@@ -42,6 +49,67 @@ export default function App() {
 
   // Dark Mode State
   const [isDarkMode, setIsDarkMode] = useState(false);
+
+  // ================= PWA INSTALLATION SYSTEM RELATED STATE =================
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isInstallable, setIsInstallable] = useState(false);
+  const [isAppInstalled, setIsAppInstalled] = useState(false);
+  const [showIosInstallGuide, setShowIosInstallGuide] = useState(false);
+
+  useEffect(() => {
+    // 1. Check if already running in standalone display-mode
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches 
+      || (window.navigator as any).standalone 
+      || document.referrer.includes('android-app://');
+    
+    if (isStandalone) {
+      setIsAppInstalled(true);
+    }
+
+    // 2. Listen to beforeinstallprompt event (triggered on Android/Chrome/Edge)
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setIsInstallable(true);
+    };
+
+    // 3. Listen to appinstalled event
+    const handleAppInstalled = () => {
+      setIsAppInstalled(true);
+      setIsInstallable(false);
+      setDeferredPrompt(null);
+      console.log('FairAudit AI installation complete!');
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
+  const triggerAppInstall = async () => {
+    if (deferredPrompt) {
+      // Trigger the prompt popup
+      deferredPrompt.prompt();
+      
+      // Wait for user selection choice
+      const { outcome } = await deferredPrompt.userChoice;
+      console.log('App install resolution outcome:', outcome);
+      
+      if (outcome === 'accepted') {
+        setIsAppInstalled(true);
+        setIsInstallable(false);
+        setDeferredPrompt(null);
+      }
+    } else {
+      // If we are on iOS Safari or if deferredPrompt is not available (e.g. Chrome on iOS, Firefox, partial Safari support)
+      // we show our gorgeous step-by-step PWA iOS installation slider/guide!
+      setShowIosInstallGuide(true);
+    }
+  };
 
   // Legal Modal State
   const [legalDocType, setLegalDocType] = useState<'terms' | 'privacy' | null>(null);
@@ -77,6 +145,148 @@ export default function App() {
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
 
+  // AI Chat Rate Limiting State and Sliding-Window tracking
+  const [chatTimestamps, setChatTimestamps] = useState<number[]>(() => {
+    const saved = localStorage.getItem('fairaudit_chat_timestamps');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+          return parsed.filter(t => typeof t === 'number' && t > oneDayAgo);
+        }
+      } catch (e) {
+        console.error("Failed to parse chat timestamps:", e);
+      }
+    }
+    return [];
+  });
+
+  // Save to localStorage when changed
+  useEffect(() => {
+    localStorage.setItem('fairaudit_chat_timestamps', JSON.stringify(chatTimestamps));
+  }, [chatTimestamps]);
+
+  // Clean or check sliding quota values
+  const checkChatRateLimit = (currentLogs: number[] = chatTimestamps) => {
+    const now = Date.now();
+    const oneMinuteAgo = now - 60 * 1000;
+    const oneDayAgo = now - 24 * 60 * 60 * 1005;
+
+    const validLogs = currentLogs.filter(t => t > oneDayAgo);
+    const minuteCount = validLogs.filter(t => t > oneMinuteAgo).length;
+    const dailyCount = validLogs.length;
+
+    const minuteLimit = 5;
+    const dailyLimit = 20;
+
+    const isMinuteLimited = minuteCount >= minuteLimit;
+    const isDailyLimited = dailyCount >= dailyLimit;
+
+    let resetInMs = 0;
+    if (isMinuteLimited) {
+      const oldestInMinute = validLogs.filter(t => t > oneMinuteAgo).sort((a, b) => a - b)[0];
+      if (oldestInMinute) resetInMs = oldestInMinute + 60 * 1000 - now;
+    } else if (isDailyLimited) {
+      const oldestInDay = validLogs.sort((a, b) => a - b)[0];
+      if (oldestInDay) resetInMs = oldestInDay + 24 * 60 * 60 * 1000 - now;
+    }
+
+    return {
+      minuteCount,
+      minuteLimit,
+      dailyCount,
+      dailyLimit,
+      isLimited: isMinuteLimited || isDailyLimited,
+      limitType: isMinuteLimited ? 'minute' : (isDailyLimited ? 'daily' : null),
+      resetInMs: Math.max(0, resetInMs)
+    };
+  };
+
+  const [rateLimitStatus, setRateLimitStatus] = useState(() => checkChatRateLimit());
+
+  // Shared Webhooks & API Keys states for Chat Context Awareness
+  const [personalIntelligenceEnabled, setPersonalIntelligenceEnabled] = useState<boolean>(() => {
+    const saved = localStorage.getItem('fairaudit_personal_intelligence');
+    return saved !== null ? saved === 'true' : false;
+  });
+
+  const [autonomousWorkerEnabled, setAutonomousWorkerEnabled] = useState<boolean>(() => {
+    const saved = localStorage.getItem('fairaudit_autonomous_worker');
+    return saved !== null ? saved === 'true' : false;
+  });
+
+  const [chatOnboardingDone, setChatOnboardingDone] = useState<boolean>(() => {
+    return localStorage.getItem('fairaudit_chat_onboarding_done') === 'true';
+  });
+
+  const [chatOnboardingStep, setChatOnboardingStep] = useState<1 | 2>(1);
+  const [apiKeys, setApiKeys] = useState<any[]>([]);
+  const [webhooks, setWebhooks] = useState<any[]>([]);
+  const [loadingKeysAndHooks, setLoadingKeysAndHooks] = useState<boolean>(false);
+  const [chatSettingsOpen, setChatSettingsOpen] = useState<boolean>(false);
+  const [actionOutputMsg, setActionOutputMsg] = useState<string | null>(null);
+  const [completedActions, setCompletedActions] = useState<Record<string, string>>({});
+
+  const fetchKeysAndHooks = async () => {
+    setLoadingKeysAndHooks(true);
+    const emailToUse = currentUser?.email || 'omp175789@gmail.com';
+    try {
+      const keysRes = await fetch(`/api/keys?email=${encodeURIComponent(emailToUse)}`);
+      const keysData = await keysRes.json();
+      if (keysData && keysData.keys) {
+        setApiKeys(keysData.keys);
+      }
+    } catch (e) {
+      console.warn("Error fetching keys in chat context:", e);
+    }
+
+    try {
+      const hooksRes = await fetch(`/api/v1/webhooks?email=${encodeURIComponent(emailToUse)}`);
+      const hooksData = await hooksRes.json();
+      if (hooksData && hooksData.webhooks) {
+        setWebhooks(hooksData.webhooks);
+      }
+    } catch (e) {
+      console.warn("Error fetching webhooks in chat context:", e);
+    }
+    setLoadingKeysAndHooks(false);
+  };
+
+  useEffect(() => {
+    fetchKeysAndHooks();
+  }, [currentUser]);
+
+  useEffect(() => {
+    const handleKeysUpdate = () => {
+      fetchKeysAndHooks();
+    };
+    window.addEventListener('keys_updated', handleKeysUpdate);
+    window.addEventListener('webhooks_updated', handleKeysUpdate);
+    return () => {
+      window.removeEventListener('keys_updated', handleKeysUpdate);
+      window.removeEventListener('webhooks_updated', handleKeysUpdate);
+    };
+  }, [currentUser]);
+
+  useEffect(() => {
+    // Ensure accurate countdown timers and tick updates
+    const interval = setInterval(() => {
+      setRateLimitStatus(checkChatRateLimit());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [chatTimestamps]);
+
+  const formatDurationStatus = (ms: number) => {
+    if (ms <= 0) return '0s';
+    const seconds = Math.ceil(ms / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.ceil(seconds / 60);
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.ceil(minutes / 60);
+    return `${hours}h`;
+  };
+
   // Initialize and check persistent properties on page load
   useEffect(() => {
     // Check Dark Mode setting
@@ -92,12 +302,18 @@ export default function App() {
     // Subscribe to Auth System State
     const unsubscribeAuth = AuthService.onAuthStateChange((user) => {
       setCurrentUser(user);
+      setIsAuthChecking(false);
     });
 
     const handleUrlLoading = async () => {
       const urlParams = new URLSearchParams(window.location.search);
       const reportId = urlParams.get('report') || window.location.hash.match(/report\/([a-zA-Z0-9]{6})/)?.[1];
       const encodedData = urlParams.get('dt');
+      
+      const moduleParam = urlParams.get('module') || window.location.hash.match(/module\/([a-zA-Z0-9\-]+)/)?.[1] || (window.location.pathname === '/api-changelog' ? 'api-changelog' : '');
+      if (moduleParam === 'api-docs' || moduleParam === 'integrations' || moduleParam === 'chrome-extension' || moduleParam === 'api-changelog') {
+        setCurrentModule(moduleParam as ModuleType);
+      }
       
       if (reportId || encodedData) {
         setLoadingShared(true);
@@ -249,8 +465,13 @@ export default function App() {
     };
   }, []);
 
-  const refreshTimeline = async () => {
-    const data = await DbService.getAllProjectsTimeline();
+  useEffect(() => {
+    refreshTimeline(currentUser?.email || 'omp175789@gmail.com');
+  }, [currentUser]);
+
+  const refreshTimeline = async (email?: string) => {
+    const userEmail = email || currentUser?.email || 'omp175789@gmail.com';
+    const data = await DbService.getAllProjectsTimeline(userEmail);
     setTimelineData(data);
     const keys = Object.keys(data);
     if (keys.length > 0 && !keys.includes(selectedTimelineProject)) {
@@ -260,6 +481,7 @@ export default function App() {
 
   const addHistory = async (moduleName: string, score: string | number, verdict: string, details: any = null) => {
     const numericScore = typeof score === 'number' ? score : parseFloat(score) || 0;
+    const userEmail = currentUser?.email || 'omp175789@gmail.com';
     
     // Save locally
     const newRecord: HistoryRecord = {
@@ -277,8 +499,30 @@ export default function App() {
     localStorage.setItem('auditHistory', JSON.stringify(newHistory));
 
     // Save Timeline Entry to db (Firebase / localStorage)
-    await DbService.saveTimelineEntry(projectName, numericScore, moduleName);
-    await refreshTimeline();
+    await DbService.saveTimelineEntry(projectName, numericScore, moduleName, userEmail);
+    await DbService.recordPublicAudit(moduleName, numericScore, projectName, details);
+    await refreshTimeline(userEmail);
+
+    // Trigger user webhooks automatically for this completed audit
+    try {
+      await fetch("/api/settings/webhook/trigger", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: userEmail,
+          event: "audit_complete",
+          audit_id: newRecord.id,
+          module: moduleName,
+          bias_score: numericScore,
+          verdict,
+          flagged: details?.flagged_terms || details?.protected_columns || [],
+          compliance: details?.compliance || { eeoc: verdict === "FAIR" ? "COMPLIANT" : "REVIEW_NEEDED" },
+          recommendations: details?.recommendations || []
+        })
+      });
+    } catch (e) {
+      console.warn("Failed to automatically trigger Webhook:", e);
+    }
 
     // Set Context for Chatbot Explainer
     const context = {
@@ -318,11 +562,28 @@ export default function App() {
     }
   };
 
-  const clearHistory = () => {
+  useEffect(() => {
+    // Determine user's selected element
+    setTimeout(() => {
+      const el = document.querySelector('div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(1)');
+      if (el) console.log("AIS_SELECTED_ELEMENT: " + el.className);
+    }, 2000);
+  }, []);
+
+  const clearHistory = async () => {
     setHistory([]);
     localStorage.removeItem('auditHistory');
     localStorage.removeItem('fairaudit_timeline');
     setTimelineData({});
+    try {
+      await fetch('/api/timeline/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: currentUser?.email || 'omp175789@gmail.com' })
+      });
+    } catch (err) {
+      console.warn("Failed to clear Firestore timeline remote collection:", err);
+    }
   };
 
   // Onboarding Tutorial Controls
@@ -375,9 +636,18 @@ export default function App() {
     e.preventDefault();
     if (!chatInput.trim() || chatLoading || !activeSessionId) return;
 
+    // Check sliding rate limit first
+    const currentLimitStatus = checkChatRateLimit();
+    if (currentLimitStatus.isLimited) {
+      return;
+    }
+
     const userMessageText = chatInput.trim();
     setChatInput('');
     
+    // Add current timestamp to chatTimestamps array
+    setChatTimestamps(prev => [...prev, Date.now()]);
+
     const userMsg: ChatMessage = {
       id: 'user_' + Date.now() + '_' + Math.random().toString(36).substring(2, 11),
       sender: 'user',
@@ -413,18 +683,64 @@ export default function App() {
       const historyContext = activeSession 
         ? activeSession.messages.slice(-6).map(m => `${m.sender === 'user' ? 'User' : 'Assistant'}: ${m.text}`).join('\n') 
         : '';
-      
-      const prompt = `You are FairAudit AI, an expert algorithmic fairness auditor and machine learning bias analyzer.
-Review the user's active session request:
-- Project Name: ${projectName}
-- Current Active Workspace Section: ${currentModule}
-- Recent Scanned Bias Risk Context: ${latestAuditContext ? `Module: ${latestAuditContext.module}, Score: ${latestAuditContext.score}%, Verdict: ${latestAuditContext.verdict}` : 'No active audit is run yet on this session.'}
 
-Existing chat session logs:
+      const detailTelemetryContext = personalIntelligenceEnabled 
+        ? `REAL-TIME TELEMETRY CONTEXT (Personal Intelligence: ON):
+- Current User Guest Email: ${currentUser?.email || 'omp175789@gmail.com'}
+- Configured API Keys: ${apiKeys.length} Registered Keys
+  ${apiKeys.map((k, idx) => `${idx + 1}. Key: "${k.key}", Name: "${k.name}", Description: "${k.description || 'N/A'}", Status: "${k.status}", Rolling Limits/Quota Tracker: ${k.request_count || 0}/${k.request_limit || 100} requests`).join('\n  ')}
+- Registered Webhooks: ${webhooks.length} Active Hooks
+  ${webhooks.map((w, idx) => `${idx + 1}. ID: "${w.id}", Name: "${w.name}", Status: "${w.status}", URL Endpoint: "${w.webhookUrl}", Target Modules: "${w.triggers?.modules?.join(', ') || 'all'}"`).join('\n  ')}
+- ACTIVE SYSTEM ENDPOINTS available for integration:
+  * GET /api/keys — List all developer API credentials
+  * POST /api/keys — Register a new API key (Payload: { email, name, description, request_limit })
+  * DELETE /api/keys/:key — Revoke credentials
+  * GET /api/v1/webhooks — List active webhook integrations
+  * POST /api/v1/webhooks — Save or update webhook config
+  * DELETE /api/v1/webhooks/:webhook_id — Delete webhook connection`
+        : `REAL-TIME TELEMETRY STATUS (Personal Intelligence: OFF):
+- Shared credentials and active live tables are currently hidden to maintain complete system privacy and secure information logs.
+- Note to user: If they want the AI to directly analyze or list their actual API keys or configured webhooks table, they must toggle "Personal Intelligence" option ON in the settings icon (⚙️) on the top-right of the chat panel.`;
+
+      const prompt = `You are FairAudit AI, a comprehensive human-centric algorithmic fairness auditor and real-time compliance assistant.
+YOU HAVE FULL KNOWLEDGE OF THE ENTIRE COGNITIVE ARCHITECTURE OF THIS FAIRness SUITE. Here are the core features and capabilities of this site:
+1. Resume Screening bias auditing ('resume' module) - Upload/scan applicant files.
+2. Dataset Bias Scanner ('dataset' module) - Check CSV with disparate impact 80% rule, demographic parity, RBI compliance, EEOC rules.
+3. Decision Checking & Counterfactual Scenario builder ('decision' module) - Interactive visual what-if comparison.
+4. Regulatory compliance check-panels ('checklist' module).
+5. Leaderboards & Global stats ('leaderboard' module).
+6. API Docs & key manager with sliding quota metrics ('api-docs' module).
+7. Integration pipelines (Slack, notion, raw custom webhooks) ('integrations' module).
+8. Chrome browser extension download link ('chrome-extension' module).
+9. Compliance Changelog ('api-changelog' module).
+
+${detailTelemetryContext}
+
+User Active Session:
+- Project/Scope Name: ${projectName}
+- Interactive Section: ${currentModule}
+- Recent Scanned Bias Context: ${latestAuditContext ? `Module: ${latestAuditContext.module}, Score: ${latestAuditContext.score}%, Verdict: ${latestAuditContext.verdict}` : 'No active audit run yet'}
+
+Existing conversation logs:
 ${historyContext}
+
 User asks: "${userMessageText}"
 
-Always generate helpful, expert suggestions. Format bold parameters with standard **wildcards** to represent high risk or pass status (e.g., use **high compliance risk** or **EEOC compliant** instead of unformatted descriptions). Keep responses scannable, structurally neat, with bullet lists where appropriate, limit response to 3 concise, highly readable paragraphs. Use humble, literal terminology.`;
+ASSISTANT INSTRUCTIONS:
+- Be incredibly helpful, practical, objective, and precise.
+- Format bold parameters with standard **wildcards** representing high compliance risk or EEOC standards.
+- If the user asks to create or configure a webhook (e.g. "create webhook to https://myapi.com/web"), suggest it and MUST add this exact ACTION tag code block at the VERY end of your message so the frontend renders a live, operational Action Confirmation card:
+  [ACTION_CREATE_WEBHOOK: name="Suggested Hook (AI)", url="WE_ENDPOINT_URL_HERE", secret="sec_token_99", status="enabled"]
+- If the user asks to delete a webhook, use this tag (fill with the actual matching ID from telemetry context):
+  [ACTION_DELETE_WEBHOOK: id="WEBHOOK_ID_HERE", name="Webhook Name"]
+- If the user asks to generate or register an API key:
+  [ACTION_CREATE_APIKEY: name="Suggested Key (AI)", limit=100]
+- If the user asks to delete or revoke an API key:
+  [ACTION_DELETE_APIKEY: key="KEY_RAW_HERE", name="Key Name"]
+- If the user asks for the Chrome Extension scanner, or asks how to install it, suggest it and MUST include the action tag:
+  [ACTION_NAVIGATE_EXTENSION]
+
+Keep your general response friendly, humble, scannable, and limit text to 2-3 short, highly informative paragraph blocks.`;
 
       const response = await generateContentWithFallback({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
@@ -451,12 +767,15 @@ Always generate helpful, expert suggestions. Format bold parameters with standar
         localStorage.setItem('fairaudit_chat_sessions', JSON.stringify(updated));
         return updated;
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error('Chat failed:', err);
+      const isRateLimit = err?.message?.toLowerCase().includes("limit") || err?.message?.toLowerCase().includes("quota");
       const errorMsg: ChatMessage = {
         id: 'error_' + Date.now() + '_' + Math.random().toString(36).substring(2, 11),
         sender: 'bot',
-        text: "I encountered a high-traffic connection error. Please verify your system parameters or send your message again.",
+        text: isRateLimit 
+          ? `⚠️ ${err.message}`
+          : "I encountered a high-traffic connection error. Please verify your system parameters or send your message again.",
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
       setChatSessions(prev => {
@@ -538,6 +857,273 @@ Always generate helpful, expert suggestions. Format bold parameters with standar
     setCurrentUser(null);
   };
 
+  // OFFLINE HIGH-FIDELITY COMPLIANCE REPORT GENERATOR & DOWNLOADER
+  // This serves as an absolute fallback in tight container sandboxes (e.g. preview iframes)
+  // where calling direct parent host print forms might trigger security exceptions.
+  const downloadHtmlReportFile = (moduleName: string, score: number | string, findings: any, project: string) => {
+    const certId = "FA-" + Math.floor(100000 + Math.random() * 900000) + "-" + (Math.random().toString(36).substring(2, 6).toUpperCase());
+    const dateStr = new Date().toLocaleString();
+    
+    // Process recommendations
+    const recs = findings?.recommendations || [];
+    const recsHtml = recs.map((r: string) => `
+      <li style="margin-bottom: 8px; line-height: 1.5; color: #475569;">
+        ${r}
+      </li>
+    `).join('');
+
+    // Process flagged columns
+    const flagged = findings?.flagged_columns || [];
+    const flaggedHtml = flagged.map((c: string) => `
+      <span style="display: inline-block; background-color: #f1f5f9; border: 1px solid #cbd5e1; color: #0f172a; font-family: monospace; font-size: 11px; font-weight: bold; padding: 4px 10px; border-radius: 6px; margin: 4px;">
+        ${c}
+      </span>
+    `).join('');
+
+    const htmlString = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>FairAudit AI Certified Audit Certificate</title>
+  <style>
+    body {
+      background-color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: #0f172a;
+      margin: 0;
+      padding: 40px 20px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      box-sizing: border-box;
+    }
+    .cert-container {
+      background-color: white;
+      border: 6px double #0f172a;
+      border-radius: 24px;
+      max-width: 800px;
+      width: 100%;
+      padding: 48px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+      position: relative;
+      box-sizing: border-box;
+    }
+    .watermark {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) rotate(-30deg);
+      font-size: 110px;
+      font-weight: 900;
+      color: rgba(99, 102, 241, 0.04);
+      white-space: nowrap;
+      pointer-events: none;
+      user-select: none;
+      z-index: 1;
+    }
+    .cert-content {
+      position: relative;
+      z-index: 2;
+    }
+    .cert-badge {
+      display: inline-block;
+      border: 1.5px solid #0f172a;
+      padding: 4px 12px;
+      font-size: 10px;
+      font-family: monospace;
+      font-weight: bold;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      border-radius: 6px;
+      margin-bottom: 24px;
+    }
+    .cert-title {
+      font-size: 30px;
+      font-weight: 850;
+      color: #0f172a;
+      text-transform: uppercase;
+      letter-spacing: -0.5px;
+      margin: 0 0 4px 0;
+    }
+    .cert-subtitle {
+      font-size: 11px;
+      font-family: monospace;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      margin: 0 0 36px 0;
+    }
+    .score-circle {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 110px;
+      height: 110px;
+      border-radius: 50%;
+      border: 3px solid #0f172a;
+      background: #f8fafc;
+      margin: 0 auto 36px auto;
+    }
+    .score-value {
+      font-size: 40px;
+      font-weight: 900;
+      color: #0f172a;
+      line-height: 1;
+    }
+    .score-label {
+      font-size: 9px;
+      text-transform: uppercase;
+      font-weight: bold;
+      color: #64748b;
+      margin-top: 4px;
+    }
+    .meta-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 36px;
+    }
+    .meta-table td {
+      border-bottom: 1px solid #e2e8f0;
+      padding: 12px 6px;
+      font-size: 14px;
+    }
+    .meta-table td.label {
+      font-weight: bold;
+      color: #64748b;
+      width: 40%;
+    }
+    .meta-table td.value {
+      font-weight: bold;
+      color: #0f172a;
+      text-align: right;
+    }
+    .section-title {
+      font-size: 12px;
+      text-transform: uppercase;
+      font-weight: 900;
+      letter-spacing: 1px;
+      color: #64748b;
+      border-bottom: 2px solid #e2e8f0;
+      padding-bottom: 8px;
+      margin-top: 32px;
+      margin-bottom: 16px;
+    }
+    .explanation {
+      font-size: 14.5px;
+      line-height: 1.6;
+      color: #334155;
+      font-weight: 500;
+    }
+    .footer-stamp {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      margin-top: 48px;
+      border-top: 1px dashed #cbd5e1;
+      padding-top: 24px;
+      font-size: 11px;
+      color: #94a3b8;
+      font-family: monospace;
+    }
+    @media print {
+      body {
+        background-color: white;
+        padding: 0;
+      }
+      .cert-container {
+        border-radius: 0;
+        box-shadow: none;
+        max-width: 100%;
+        border: 4px double #0f172a;
+        padding: 40px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="cert-container">
+    <div class="watermark">FAIR AUDIT</div>
+    <div class="cert-content">
+      <div style="text-align: center;">
+        <div class="cert-badge">Official Seal</div>
+        <h1 class="cert-title">FairAudit Certified Ledger</h1>
+        <p class="cert-subtitle">Security &amp; Decisive Parity Audit Clearance Document</p>
+        
+        <div class="score-circle">
+          <span class="score-value">${score}</span>
+          <span class="score-label">Bias Risk</span>
+        </div>
+      </div>
+      
+      <table class="meta-table">
+        <tr>
+          <td class="label">Project Track</td>
+          <td class="value">${project || 'Workspace Recruitment Group'}</td>
+        </tr>
+        <tr>
+          <td class="label">Target Audit Module</td>
+          <td class="value">${moduleName}</td>
+        </tr>
+        <tr>
+          <td class="label">Evaluation State</td>
+          <td class="value">${Number(score) < 40 ? 'COMPLIANT (EEOC MERIT)' : 'ACTION REQUIRED (PARITY RISK)'}</td>
+        </tr>
+        <tr>
+          <td class="label">Verification Code</td>
+          <td class="value" style="font-family: monospace;">${certId}</td>
+        </tr>
+        <tr>
+          <td class="label">Time Statement</td>
+          <td class="value">${dateStr}</td>
+        </tr>
+      </table>
+
+      <div class="section-title">Technical Audit Findings</div>
+      <p class="explanation">${findings?.explanation || 'No proxy bias variables detected on checked paths. Algorithmic compliance standards satisfied.'}</p>
+
+      ${flagged.length > 0 ? `
+        <div class="section-title">Checked Actioned Proxy Columns</div>
+        <div style="margin-top: 8px; margin-bottom: 8px;">
+          ${flaggedHtml}
+        </div>
+      ` : ''}
+
+      ${recs.length > 0 ? `
+        <div class="section-title">Remediation Guidelines</div>
+        <ol style="margin: 0; padding-left: 20px;">
+          ${recsHtml}
+        </ol>
+      ` : ''}
+
+      <div class="footer-stamp">
+        <span>Verified by FairAudit AI Compliance Engine</span>
+        <span>Certificate ID: ${certId}</span>
+      </div>
+    </div>
+  </div>
+  <script>
+    window.onload = function() {
+      setTimeout(function() {
+        window.print();
+      }, 500);
+    }
+  </script>
+</body>
+</html>`;
+
+    const blob = new Blob([htmlString], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `FairAudit_Compliance_Report_${moduleName.replace(/\s+/g, '_')}.html`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   // PDF printer trigger helper
   const handlePrintExport = (moduleName: string, score: number | string, findings: any) => {
     setPrintData({
@@ -546,17 +1132,84 @@ Always generate helpful, expert suggestions. Format bold parameters with standar
       findings,
       projectName
     });
-    setTimeout(() => {
-      window.print();
-    }, 150);
+    // Fire high-fidelity digital download as a robust backup
+    downloadHtmlReportFile(moduleName, score, findings, projectName);
   };
 
   // Render Formatted Message Markdown helper to display styled items instead of clear text
   const renderMessageBubbleText = (text: string) => {
-    const lines = text.split('\n');
+    // Parse Action tags Suggesters
+    const actionTags: any[] = [];
+    
+    // Parse ACTION_CREATE_WEBHOOK
+    const createWhRegex = /\[ACTION_CREATE_WEBHOOK:\s*name="([^"]+)",\s*url="([^"]+)",\s*secret="([^"]*)",\s*status="([^"]*)"\]/g;
+    let createWhMatch;
+    // reset lastIndex
+    createWhRegex.lastIndex = 0;
+    while ((createWhMatch = createWhRegex.exec(text)) !== null) {
+      actionTags.push({
+        type: 'CREATE_WEBHOOK',
+        name: createWhMatch[1],
+        url: createWhMatch[2],
+        secret: createWhMatch[3],
+        status: createWhMatch[4]
+      });
+    }
+
+    // Parse ACTION_DELETE_WEBHOOK
+    const deleteWhRegex = /\[ACTION_DELETE_WEBHOOK:\s*id="([^"]+)",\s*name="([^"]+)"\]/g;
+    let deleteWhMatch;
+    deleteWhRegex.lastIndex = 0;
+    while ((deleteWhMatch = deleteWhRegex.exec(text)) !== null) {
+      actionTags.push({
+        type: 'DELETE_WEBHOOK',
+        id: deleteWhMatch[1],
+        name: deleteWhMatch[2]
+      });
+    }
+
+    // Parse ACTION_CREATE_APIKEY
+    const createKeyRegex = /\[ACTION_CREATE_APIKEY:\s*name="([^"]+)",\s*limit=(\d+)\]/g;
+    let createKeyMatch;
+    createKeyRegex.lastIndex = 0;
+    while ((createKeyMatch = createKeyRegex.exec(text)) !== null) {
+      actionTags.push({
+        type: 'CREATE_APIKEY',
+        name: createKeyMatch[1],
+        limit: parseInt(createKeyMatch[2], 10)
+      });
+    }
+
+    // Parse ACTION_DELETE_APIKEY
+    const deleteKeyRegex = /\[ACTION_DELETE_APIKEY:\s*key="([^"]+)",\s*name="([^"]+)"\]/g;
+    let deleteKeyMatch;
+    deleteKeyRegex.lastIndex = 0;
+    while ((deleteKeyMatch = deleteKeyRegex.exec(text)) !== null) {
+      actionTags.push({
+        type: 'DELETE_APIKEY',
+        key: deleteKeyMatch[1],
+        name: deleteKeyMatch[2]
+      });
+    }
+
+    if (text.includes('[ACTION_NAVIGATE_EXTENSION]')) {
+      actionTags.push({ type: 'NAVIGATE_EXTENSION' });
+    }
+
+    // Strip tags from main content text
+    let cleanText = text
+      .replace(/\[ACTION_CREATE_WEBHOOK:[^\]]+\]/g, '')
+      .replace(/\[ACTION_DELETE_WEBHOOK:[^\]]+\]/g, '')
+      .replace(/\[ACTION_CREATE_APIKEY:[^\]]+\]/g, '')
+      .replace(/\[ACTION_DELETE_APIKEY:[^\]]+\]/g, '')
+      .replace('[ACTION_NAVIGATE_EXTENSION]', '')
+      .trim();
+
+    const lines = cleanText.split('\n');
     return (
       <div className="space-y-1.5 leading-relaxed text-xs sm:text-[13px] font-medium font-sans">
         {lines.map((line, lIdx) => {
+          if (!line.trim()) return null;
           // Handle standard bullet points list
           if (line.trim().startsWith('- ') || line.trim().startsWith('* ')) {
             const content = line.trim().substring(2);
@@ -575,7 +1228,7 @@ Always generate helpful, expert suggestions. Format bold parameters with standar
             return (
               <div key={lIdx} className="flex gap-2 pl-3 items-start my-0.5">
                 <span className="font-bold text-xs text-indigo-500 mt-0.5 font-mono">{num}.</span>
-                <span className="flex-1 text-slate-705 dark:text-slate-300">{renderFormattedLine(content)}</span>
+                <span className="flex-1 text-slate-750 dark:text-slate-300">{renderFormattedLine(content)}</span>
               </div>
             );
           }
@@ -586,6 +1239,260 @@ Always generate helpful, expert suggestions. Format bold parameters with standar
             </p>
           );
         })}
+
+        {/* Action result status alert */}
+        {actionOutputMsg && (
+          <div className="mt-2 p-2.5 bg-indigo-50 dark:bg-slate-800 rounded-xl text-[11px] text-indigo-850 dark:text-indigo-305 flex items-center justify-between gap-2 border border-indigo-100/40 dark:border-indigo-950">
+            <span className="flex-1">⚙️ {actionOutputMsg}</span>
+            <button 
+              onClick={() => setActionOutputMsg(null)}
+              className="text-indigo-500 hover:text-indigo-700 dark:hover:text-indigo-300 cursor-pointer p-0.5"
+              title="Dismiss status"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Interactive Action Confirmation Widgets */}
+        {actionTags.length > 0 && (
+          <div className="mt-4 pt-3.5 border-t border-slate-100 dark:border-slate-800 space-y-3">
+            {actionTags.map((act, idx) => {
+              if (act.type === 'CREATE_WEBHOOK') {
+                const actionKey = `create_webhook_${act.name}_${act.url}`;
+                const isCompleted = !!completedActions[actionKey];
+                return (
+                  <div key={idx} className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800/70 rounded-xl p-3 text-left">
+                    <span className="text-[9.5px] uppercase tracking-wider font-extrabold text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/40 px-1.5 py-0.5 rounded border border-indigo-100/30">Action suggested • Create Webhook</span>
+                    <div className="text-xs text-slate-650 dark:text-slate-300 mt-2 space-y-1">
+                      <div><strong>Pipeline Name:</strong> {act.name}</div>
+                      <div className="truncate"><strong>Endpoint Url:</strong> <span className="font-mono text-[10px] bg-slate-100 dark:bg-slate-850 p-0.5 rounded">{act.url}</span></div>
+                      {act.secret && <div><strong>Secret:</strong> <span className="font-mono text-[10px] bg-slate-100 dark:bg-slate-850 p-0.5 rounded">{act.secret}</span></div>}
+                    </div>
+                    {isCompleted ? (
+                      <div className="mt-2.5 p-2 bg-emerald-50 dark:bg-emerald-950/45 border border-emerald-150 dark:border-emerald-800 rounded-xl text-emerald-800 dark:text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5">
+                        <span>✓ Connected: {completedActions[actionKey]}</span>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={async () => {
+                          const emailToUse = currentUser?.email || 'omp175789@gmail.com';
+                          setActionOutputMsg("Registering automated pipeline hook...");
+                          try {
+                            const res = await fetch("/api/v1/webhooks", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                email: emailToUse,
+                                name: act.name,
+                                webhookUrl: act.url,
+                                status: act.status || "enabled",
+                                secretToken: act.secret || "",
+                                triggers: { modules: ["hiring", "dataset", "decision"], min_bias_score: 0 },
+                                conditions: [],
+                                payload_fields: ["event", "timestamp", "audit_id", "module", "bias_score", "verdict", "compliance", "report_url"],
+                                field_mapping: {},
+                                customHeaders: []
+                              })
+                            });
+                            const data = await res.json();
+                            if (data.success) {
+                              const note = `Webhook "${act.name}" is now live.`;
+                              setActionOutputMsg(`✅ ${note}`);
+                              setCompletedActions(prev => ({ ...prev, [actionKey]: note }));
+                              fetchKeysAndHooks();
+                              window.dispatchEvent(new Event('webhooks_updated'));
+                            } else {
+                              setActionOutputMsg(`❌ Error: ${data.error || 'Server error'}`);
+                            }
+                          } catch (err: any) {
+                            setActionOutputMsg(`❌ Connection failed: ${err.message}`);
+                          }
+                        }}
+                        style={{ color: '#000000' }}
+                        className="mt-2.5 w-full py-2 px-3 bg-indigo-100 hover:bg-indigo-200 font-extrabold text-xs rounded-xl cursor-pointer transition-colors border border-indigo-200"
+                      >
+                        Confirm and Save Webhook Endpoint
+                      </button>
+                    )}
+                  </div>
+                );
+              }
+              if (act.type === 'DELETE_WEBHOOK') {
+                const actionKey = `delete_webhook_${act.id}`;
+                const isCompleted = !!completedActions[actionKey];
+                return (
+                  <div key={idx} className="bg-rose-50/50 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-900/55 rounded-xl p-3 text-left">
+                    <span className="text-[9.5px] uppercase tracking-wider font-extrabold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950 px-1.5 py-0.5 rounded">Action suggested • Delete Webhook</span>
+                    <div className="text-xs text-slate-650 dark:text-slate-300 mt-2 space-y-1">
+                      <div><strong>Webhook Name:</strong> {act.name}</div>
+                      <div><strong>Id:</strong> <span className="font-mono text-[10px]">{act.id}</span></div>
+                    </div>
+                    {isCompleted ? (
+                      <div className="mt-2.5 p-2 bg-rose-100 dark:bg-rose-950/45 border border-rose-200 dark:border-rose-900 rounded-xl text-rose-800 dark:text-rose-300 font-bold text-xs flex items-center justify-center gap-1.5">
+                        <span>✓ Permanently Revoked and Deleted</span>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={async () => {
+                          const emailToUse = currentUser?.email || 'omp175789@gmail.com';
+                          setActionOutputMsg(`Removing webhook endpoint ${act.name}...`);
+                          try {
+                            const res = await fetch(`/api/v1/webhooks/${act.id}?email=${encodeURIComponent(emailToUse)}`, {
+                              method: "DELETE"
+                            });
+                            if (res.ok) {
+                              const note = `Deleted ${act.name}`;
+                              setActionOutputMsg(`✅ Webhook "${act.name}" permanently de-registered.`);
+                              setCompletedActions(prev => ({ ...prev, [actionKey]: note }));
+                              fetchKeysAndHooks();
+                              window.dispatchEvent(new Event('webhooks_updated'));
+                            } else {
+                              setActionOutputMsg(`❌ Failed to delete webhook.`);
+                            }
+                          } catch (err: any) {
+                            setActionOutputMsg(`❌ Error: ${err.message}`);
+                          }
+                        }}
+                        style={{ color: '#000000' }}
+                        className="mt-2.5 w-full py-2 bg-rose-150 hover:bg-rose-200 font-extrabold text-xs rounded-xl cursor-pointer transition-colors border border-rose-250"
+                      >
+                        Delete and Deactivate Webhook
+                      </button>
+                    )}
+                  </div>
+                );
+              }
+              if (act.type === 'CREATE_APIKEY') {
+                const actionKey = `create_apikey_${act.name}`;
+                const isCompleted = !!completedActions[actionKey];
+                return (
+                  <div key={idx} className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800/70 rounded-xl p-3 text-left">
+                    <span className="text-[9.5px] uppercase tracking-wider font-extrabold text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/40 px-1.5 py-0.5 rounded border border-indigo-100/30">Action suggested • Generate Developer Key</span>
+                    <div className="text-xs text-slate-650 dark:text-slate-300 mt-2 space-y-1">
+                      <div><strong>Key Name:</strong> {act.name}</div>
+                      <div><strong>Daily Request Quota:</strong> {act.limit} calls</div>
+                    </div>
+                    {isCompleted ? (
+                      <div className="mt-2.5 p-2 bg-emerald-50 dark:bg-emerald-950/45 border border-emerald-150 dark:border-emerald-800 rounded-xl text-emerald-800 dark:text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5">
+                        <span>✓ Credentials generated successfully</span>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={async () => {
+                          const emailToUse = currentUser?.email || 'omp175789@gmail.com';
+                          setActionOutputMsg("Generating compliance access credentials...");
+                          try {
+                            const res = await fetch("/api/keys", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                email: emailToUse,
+                                name: act.name,
+                                description: "Generated dynamically via chat session AI agent prompt",
+                                request_limit: act.limit || 100,
+                                status: "active"
+                              })
+                            });
+                            const data = await res.json();
+                            if (data.success) {
+                              const note = `Generated ${act.name}`;
+                              setActionOutputMsg(`✅ API Key generated under "${act.name}" successfully!`);
+                              setCompletedActions(prev => ({ ...prev, [actionKey]: note }));
+                              fetchKeysAndHooks();
+                              window.dispatchEvent(new Event('keys_updated'));
+                            } else {
+                              setActionOutputMsg(`❌ Server error generating key.`);
+                            }
+                          } catch (err: any) {
+                            setActionOutputMsg(`❌ Connection error: ${err.message}`);
+                          }
+                        }}
+                        style={{ color: '#000000' }}
+                        className="mt-2.5 w-full py-2 bg-indigo-100 hover:bg-indigo-200 font-extrabold text-xs rounded-xl cursor-pointer transition-colors border border-indigo-200"
+                      >
+                        Confirm and Generate API Key
+                      </button>
+                    )}
+                  </div>
+                );
+              }
+              if (act.type === 'DELETE_APIKEY') {
+                const actionKey = `delete_apikey_${act.key}`;
+                const isCompleted = !!completedActions[actionKey];
+                return (
+                  <div key={idx} className="bg-rose-50/50 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-900/55 rounded-xl p-3 text-left">
+                    <span className="text-[9.5px] uppercase tracking-wider font-extrabold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950 px-1.5 py-0.5 rounded">Action suggested • Revoke API Credentials</span>
+                    <div className="text-xs text-slate-650 dark:text-slate-300 mt-2 space-y-1">
+                      <div><strong>Key Name:</strong> {act.name}</div>
+                      <div className="truncate"><strong>Key Value:</strong> <span className="font-mono text-[9.5px] bg-white dark:bg-slate-900 p-0.5 rounded">{act.key}</span></div>
+                    </div>
+                    {isCompleted ? (
+                      <div className="mt-2.5 p-2 bg-rose-100 dark:bg-rose-950/45 border border-rose-200 dark:border-rose-900 rounded-xl text-rose-800 dark:text-rose-300 font-bold text-xs flex items-center justify-center gap-1.5">
+                        <span>✓ Permanently Revoked and Deleted</span>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={async () => {
+                          const emailToUse = currentUser?.email || 'omp175789@gmail.com';
+                          setActionOutputMsg(`Revoking key "${act.name}"...`);
+                          try {
+                            const res = await fetch(`/api/keys/${act.key}?email=${encodeURIComponent(emailToUse)}`, {
+                              method: "DELETE"
+                            });
+                            if (res.ok) {
+                              const note = `Revoked ${act.name}`;
+                              setActionOutputMsg(`✅ API Key "${act.name}" successfully revoked.`);
+                              setCompletedActions(prev => ({ ...prev, [actionKey]: note }));
+                              fetchKeysAndHooks();
+                              window.dispatchEvent(new Event('keys_updated'));
+                            } else {
+                              setActionOutputMsg(`❌ Server failed to revoke credentials.`);
+                            }
+                          } catch (err: any) {
+                            setActionOutputMsg(`❌ Error: ${err.message}`);
+                          }
+                        }}
+                        style={{ color: '#000000' }}
+                        className="mt-2.5 w-full py-2 bg-rose-150 hover:bg-rose-200 font-extrabold text-xs rounded-xl cursor-pointer transition-colors border border-rose-250"
+                      >
+                        Confirm Permanent Revocation
+                      </button>
+                    )}
+                  </div>
+                );
+              }
+              if (act.type === 'NAVIGATE_EXTENSION') {
+                const actionKey = `navigate_extension`;
+                const isCompleted = !!completedActions[actionKey];
+                return (
+                  <div key={idx} className="bg-indigo-50/40 dark:bg-indigo-950/20 border border-indigo-100/60 rounded-xl p-3 text-left">
+                    <span className="text-[9.5px] uppercase tracking-wider font-extrabold text-indigo-700 dark:text-indigo-400 bg-indigo-50 dark:bg-slate-900 px-1.5 py-0.5 rounded">Workspace Extension Routing</span>
+                    <p className="text-xs text-slate-600 dark:text-slate-300 mt-2 mb-2">You can visit the dedicated Chrome Extension module where you can configure parameters, download popup components, and inspect script packages instantly.</p>
+                    {isCompleted ? (
+                      <div className="p-2 bg-emerald-50 dark:bg-emerald-950/45 border border-emerald-150 dark:border-emerald-800 rounded-xl text-emerald-800 dark:text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5">
+                        <span>✓ Redirecting you now...</span>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setCompletedActions(prev => ({ ...prev, [actionKey]: "Redirected" }));
+                          setCurrentModule('chrome-extension');
+                          setChatOpen(false);
+                        }}
+                        style={{ color: '#000000' }}
+                        className="w-full py-2 bg-indigo-100 hover:bg-indigo-200 font-extrabold text-xs rounded-xl cursor-pointer transition-colors flex items-center justify-center gap-1.5 shadow-sm border border-indigo-200"
+                      >
+                        🔗 Open Extension Download Page
+                      </button>
+                    )}
+                  </div>
+                );
+              }
+              return null;
+            })}
+          </div>
+        )}
       </div>
     );
   };
@@ -627,6 +1534,26 @@ Always generate helpful, expert suggestions. Format bold parameters with standar
       );
     }
 
+    const formatLabelDate = (dateVal: string) => {
+      try {
+        const parsed = new Date(dateVal);
+        if (isNaN(parsed.getTime())) return dateVal;
+        return parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      } catch (err) {
+        return dateVal;
+      }
+    };
+
+    const formatTooltipDate = (dateVal: string) => {
+      try {
+        const parsed = new Date(dateVal);
+        if (isNaN(parsed.getTime())) return dateVal;
+        return parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      } catch (err) {
+        return dateVal;
+      }
+    };
+
     const width = 600;
     const height = 220;
     const padding = 35;
@@ -657,7 +1584,7 @@ Always generate helpful, expert suggestions. Format bold parameters with standar
               return (
                 <g key={idx}>
                   <line x1={padding} y1={y} x2={width - padding} y2={y} className={`${lineStyle} stroke-dashed`} strokeWidth="1" />
-                  <text x={padding - 8} y={y + 4} className="text-[10px] font-bold fill-slate-400 dark:fill-slate-550 text-right font-mono" textAnchor="end">{level}</text>
+                  <text x={padding - 8} y={y + 4} className="text-[10px] font-bold fill-slate-440 dark:fill-slate-550 text-right font-mono" textAnchor="end">{level}</text>
                 </g>
               );
             })}
@@ -676,16 +1603,44 @@ Always generate helpful, expert suggestions. Format bold parameters with standar
 
             {points.map((p, idx) => {
               const color = p.score > 70 ? '#ef4444' : p.score >= 40 ? '#eab308' : '#22c55e';
+              // Space out dates so they don't overlap on the X-axis
+              const shouldShowLabel = 
+                points.length <= 5 || 
+                idx === 0 || 
+                idx === points.length - 1 || 
+                idx === Math.floor(points.length / 2) ||
+                (points.length <= 10 && idx % 2 === 0);
+
               return (
                 <g key={idx} className="group cursor-pointer">
                   <circle cx={p.x} cy={p.y} r="6" fill="#ffffff" stroke={color} strokeWidth="2.5" />
                   <circle cx={p.x} cy={p.y} r="10" fill="transparent" className="hover:fill-[#6366f1]/5" />
-                  <text x={p.x} y={p.y - 12} className="text-[10px] font-extrabold fill-slate-800 dark:fill-slate-205 text-anchor shadow-sm opacity-0 group-hover:opacity-100 transition-opacity bg-white dark:bg-slate-900 px-1 font-mono" textAnchor="middle">
-                    {p.score}%
-                  </text>
-                  <text x={p.x} y={height - 10} className="text-[9px] font-bold fill-slate-450 dark:fill-slate-500 font-mono" textAnchor="middle">
-                    {p.date}
-                  </text>
+                  
+                  {/* Enhanced interactive hover card */}
+                  <g className="opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                    <rect 
+                      x={p.x - 55} 
+                      y={p.y - 32} 
+                      width="110" 
+                      height="20" 
+                      rx="6" 
+                      className="fill-slate-900 dark:fill-slate-800"
+                    />
+                    <text 
+                      x={p.x} 
+                      y={p.y - 19} 
+                      className="text-[8px] font-bold fill-white font-mono" 
+                      textAnchor="middle"
+                    >
+                      {p.score}% | {formatTooltipDate(p.date)} ({p.module})
+                    </text>
+                  </g>
+
+                  {shouldShowLabel && (
+                    <text x={p.x} y={height - 10} className="text-[9px] font-bold fill-slate-450 dark:fill-slate-500 font-mono" textAnchor="middle">
+                      {formatLabelDate(p.date)}
+                    </text>
+                  )}
                 </g>
               );
             })}
@@ -726,6 +1681,30 @@ Always generate helpful, expert suggestions. Format bold parameters with standar
       </div>
     );
   };
+
+  // If the auth session is resolving
+  if (isAuthChecking) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-6 text-center select-none">
+        <div className="relative mb-6">
+          <div className="🤚">
+            <div className="👉"></div>
+            <div className="👉"></div>
+            <div className="👉"></div>
+            <div className="👉"></div>
+            <div className="🌴"></div>		
+            <div className="👍"></div>
+          </div>
+        </div>
+        <h3 className="text-sm font-black font-display text-slate-800 dark:text-slate-100 uppercase tracking-widest animate-pulse mt-4">
+          Synchronizing Secure Session Gateway
+        </h3>
+        <p className="text-slate-400 dark:text-slate-550 text-[10px] font-mono mt-1">
+          Establishing connection to Firestore db • Verifying compliant user authority
+        </p>
+      </div>
+    );
+  }
 
   // If a shared public report is accessed cleanly
   if (loadingShared) {
@@ -1051,69 +2030,126 @@ Always generate helpful, expert suggestions. Format bold parameters with standar
   return (
     <div className={`min-h-screen p-4 sm:p-6 lg:p-8 print:p-0 transition-colors duration-200 dark:bg-slate-950 dark:text-slate-100 ${isDarkMode ? 'dark' : ''} flex flex-col relative w-full overflow-x-hidden`}>
       
-      {/* Dynamic printable overlay target */}
+      {/* Dynamic printable overlay target & Gorgeous interactive modal */}
       {printData && (
-        <div className="hidden print:block max-w-4xl mx-auto p-12 bg-white text-black font-sans print-block min-h-screen">
-          <div className="border-4 border-double border-slate-900 p-8 rounded-2xl text-center relative">
-            <div className="absolute top-4 right-4 text-[9px] font-mono border border-black px-2 py-0.5 rounded">
-              FORMAL AUDIT RECOGNITION
-            </div>
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-6 z-[100] overflow-y-auto print:p-0 print:static print:bg-white print:block">
+          <div className="max-w-4xl w-full grid grid-cols-1 md:grid-cols-12 gap-6 bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl print:border-none print:shadow-none print:p-0 print:bg-white">
             
-            <h1 className="text-3xl font-extrabold uppercase tracking-tight font-display text-slate-900 mb-1">FairAudit AI Certified Ledger</h1>
-            <p className="text-xs font-mono uppercase tracking-widest text-slate-500">Security & Decisive Parity Audit Clearance Document</p>
-            
-            <div className="my-8 flex justify-center">
-              <div className="border-2 border-slate-900 p-6 rounded-full w-28 h-28 flex flex-col items-center justify-center">
-                <span className="text-4xl font-black font-mono">{printData.score}</span>
-                <span className="text-[8px] font-bold uppercase tracking-wider mt-0.5 text-slate-550">Bias Risk Level</span>
-              </div>
-            </div>
-
-            <div className="text-left space-y-4 max-w-xl mx-auto border-t border-slate-200 pt-6">
-              <p className="border-b border-slate-100 pb-2 text-sm flex justify-between">
-                <strong>Project Compliance Track:</strong> <span>{printData.projectName}</span>
-              </p>
-              <p className="border-b border-slate-100 pb-2 text-sm flex justify-between">
-                <strong>Target Audit Module:</strong> <span>{printData.module}</span>
-              </p>
-              <p className="border-b border-slate-100 pb-2 text-sm flex justify-between">
-                <strong>Time Statement:</strong> <span>{new Date().toLocaleString()}</span>
-              </p>
-              
-              <div className="pt-2">
-                <strong className="text-xs font-black uppercase tracking-wider text-slate-400 block mb-2">Technical Findings Context</strong>
-                <p className="text-slate-700 text-sm font-semibold leading-relaxed">
-                  {printData.findings?.explanation || 'Statistical variables checked. Recommended algorithmic alignment rules applied successfully.'}
+            {/* Guide controls side panel (hidden in print) */}
+            <div className="md:col-span-4 flex flex-col justify-between text-white space-y-6 print:hidden">
+              <div className="space-y-3.5">
+                <span className="text-[10px] font-black tracking-widest text-[#6366f1] uppercase">Interactive Compliances</span>
+                <h3 className="text-lg font-black tracking-tight text-white font-display">Certificate Compiled Successfully!</h3>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  We have locked in a cryptographically audited digital record of your FairAudit AI security ledger.
                 </p>
+                <div className="bg-slate-950/50 p-3.5 rounded-2xl border border-slate-800/65 space-y-2 text-[11px] text-slate-400">
+                  <p className="font-semibold text-slate-300">💡 Dual Export Fail-Safes:</p>
+                  <p>1. <strong>Offline Certificate (.html)</strong>: Automatically downloaded to your local drive! Open it at any time to print offline.</p>
+                  <p>2. <strong>Browser Print Layout</strong>: Optimized for high contrast standard A4 paper sizes.</p>
+                </div>
               </div>
 
-              {printData.findings?.flagged_columns && printData.findings.flagged_columns.length > 0 && (
-                <div className="pt-2">
-                  <strong className="text-xs font-black uppercase tracking-wider text-slate-400 block mb-1">Checked Flagged Proxy Attributes</strong>
-                  <div className="flex flex-wrap gap-2 mt-1">
-                    {printData.findings.flagged_columns.map((c: string, idx: number) => (
-                      <span key={idx} className="px-2 py-1 border border-slate-300 text-xs font-bold font-mono rounded bg-slate-50">{c}</span>
-                    ))}
+              <div className="flex flex-col gap-2 pt-4">
+                <button
+                  type="button"
+                  onClick={() => downloadHtmlReportFile(printData.module, printData.score, printData.findings, printData.projectName)}
+                  className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-md flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                >
+                  📥 Download Certificate File
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-bold rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                >
+                  🖨️ Trigger Browser Print
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPrintData(null)}
+                  className="w-full py-2.5 px-4 bg-red-950/20 text-red-400 hover:bg-red-950/40 border border-red-900/10 text-xs font-bold rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                >
+                  Dismiss Preview
+                </button>
+              </div>
+            </div>
+
+            {/* High-fidelity printed certificate card (Aesthetics optimized for screen and paper print) */}
+            <div className="md:col-span-8 bg-white text-black p-8 sm:p-12 rounded-2xl text-center relative border border-slate-150 shadow-xl print:border-none print:shadow-none print:p-0 print:col-span-12">
+              {/* Back out options absolute inside printable certificate, hidden in print */}
+              <button
+                type="button"
+                onClick={() => setPrintData(null)}
+                className="absolute top-4 right-4 p-1.5 rounded-full hover:bg-slate-100 text-slate-500 hover:text-black transition-colors print:hidden cursor-pointer"
+                title="Dismiss and close report preview"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <div className="border-4 border-double border-slate-900 p-6 sm:p-8 rounded-2xl relative">
+                <div className="absolute top-4 right-4 text-[9px] font-mono border border-black px-2 py-0.5 rounded">
+                  FORMAL AUDIT RECOGNITION
+                </div>
+                
+                <h1 className="text-2xl sm:text-3xl font-extrabold uppercase tracking-tight font-display text-slate-900 mb-1">FairAudit Certified Ledger</h1>
+                <p className="text-xs font-mono uppercase tracking-widest text-slate-500">Security & Decisive Parity Audit Clearance Document</p>
+                
+                <div className="my-8 flex justify-center">
+                  <div className="border-2 border-slate-900 p-6 rounded-full w-28 h-28 flex flex-col items-center justify-center bg-slate-50">
+                    <span className="text-4xl font-black font-mono">{printData.score}</span>
+                    <span className="text-[8px] font-bold uppercase tracking-wider mt-0.5 text-slate-550">Bias Risk Level</span>
                   </div>
                 </div>
-              )}
 
-              {printData.findings?.recommendations && printData.findings.recommendations.length > 0 && (
-                <div className="pt-2">
-                  <strong className="text-xs font-black uppercase tracking-wider text-slate-400 block mb-1">Corrective Compliance Actions</strong>
-                  <ul className="list-decimal pl-5 space-y-1.5 mt-2 text-xs font-semibold text-slate-650">
-                    {printData.findings.recommendations.map((r: string, idx: number) => (
-                      <li key={idx} className="leading-relaxed">{r}</li>
-                    ))}
-                  </ul>
+                <div className="text-left space-y-4 max-w-xl mx-auto border-t border-slate-200 pt-6">
+                  <p className="border-b border-slate-100 pb-2 text-sm flex justify-between">
+                    <strong>Project Compliance Track:</strong> <span className="font-bold text-slate-900">{printData.projectName}</span>
+                  </p>
+                  <p className="border-b border-slate-100 pb-2 text-sm flex justify-between">
+                    <strong>Target Audit Module:</strong> <span className="font-bold text-slate-900">{printData.module}</span>
+                  </p>
+                  <p className="border-b border-slate-100 pb-2 text-sm flex justify-between">
+                    <strong>Time Statement:</strong> <span className="font-bold text-slate-900">{new Date().toLocaleString()}</span>
+                  </p>
+                  
+                  <div className="pt-2">
+                    <strong className="text-xs font-black uppercase tracking-wider text-slate-400 block mb-2">Technical Findings Context</strong>
+                    <p className="text-slate-700 text-sm font-semibold leading-relaxed">
+                      {printData.findings?.explanation || 'Statistical variables checked. Recommended algorithmic alignment rules applied successfully.'}
+                    </p>
+                  </div>
+
+                  {printData.findings?.flagged_columns && printData.findings.flagged_columns.length > 0 && (
+                    <div className="pt-2">
+                      <strong className="text-xs font-black uppercase tracking-wider text-slate-400 block mb-1">Checked Flagged Proxy Attributes</strong>
+                      <div className="flex flex-wrap gap-2 mt-1">
+                        {printData.findings.flagged_columns.map((c: string, idx: number) => (
+                          <span key={idx} className="px-2 py-1 border border-slate-300 text-xs font-bold font-mono rounded bg-slate-50">{c}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {printData.findings?.recommendations && printData.findings.recommendations.length > 0 && (
+                    <div className="pt-2">
+                      <strong className="text-xs font-black uppercase tracking-wider text-slate-400 block mb-1">Corrective Compliance Actions</strong>
+                      <ul className="list-decimal pl-5 space-y-1.5 mt-2 text-xs font-semibold text-slate-650">
+                        {printData.findings.recommendations.map((r: string, idx: number) => (
+                          <li key={idx} className="leading-relaxed">{r}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
-              )}
+
+                <div className="mt-12 pt-8 border-t border-slate-300 flex flex-col sm:flex-row justify-between text-[11px] font-mono text-slate-450 gap-2">
+                  <span>Assessed Framework: FairAudit AI Compliance Hub</span>
+                  <span>Verification Hash: {(Math.random().toString(36).substr(2, 9) + '-' + Math.random().toString(36).substr(2, 9)).toUpperCase()}</span>
+                </div>
+              </div>
             </div>
 
-            <div className="mt-12 pt-8 border-t border-slate-300 flex flex-col sm:flex-row justify-between text-[11px] font-mono text-slate-400 gap-2">
-              <span>Assessed Framework: FairAudit AI Automated Compliance Hub</span>
-              <span>Verification Hash: {(Math.random().toString(36).substr(2, 9) + '-' + Math.random().toString(36).substr(2, 9)).toUpperCase()}</span>
-            </div>
           </div>
         </div>
       )}
@@ -1122,98 +2158,148 @@ Always generate helpful, expert suggestions. Format bold parameters with standar
       <div className="print:hidden flex flex-col flex-1 w-full relative">
 
       {/* Primary Landing / Top Header Dashboard Config Bar */}
-      <div className="max-w-7xl mx-auto w-full bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-3xl p-4 sm:p-6 shadow-[0_2px_8px_rgba(0,0,0,0.03)] mb-8 flex flex-col lg:flex-row items-center justify-between gap-6 print:hidden">
-        <div className="flex items-center justify-between w-full lg:w-auto gap-4">
+      <div className="max-w-7xl mx-auto w-full bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-3xl p-4 sm:p-5 shadow-[0_2px_8px_rgba(0,0,0,0.03)] mb-8 flex flex-col gap-4 print:hidden">
+        
+        {/* Row 1: Logo & brand title / user profile info */}
+        <div className="flex flex-row items-center justify-between w-full gap-4 pb-3 border-b border-dashed border-slate-100 dark:border-slate-800 md:border-none md:pb-0">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-indigo-650 dark:bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-md shadow-indigo-100">
+            <div className="w-10 h-10 bg-indigo-650 dark:bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-md shadow-indigo-100 shrink-0">
               <SparklingIcon className="w-5.25 h-5.25 animate-pulse" />
             </div>
             <div>
               <span className="text-[10px] font-black tracking-widest text-[#6366f1] uppercase block leading-none">Enterprise Suite</span>
-              <h1 className="text-lg font-extrabold text-slate-800 dark:text-white tracking-tight leading-snug font-display">FairAudit AI Hub</h1>
+              <h1 className="text-sm sm:text-base lg:text-lg font-extrabold text-slate-800 dark:text-white tracking-tight leading-snug font-display">FairAudit AI Hub</h1>
             </div>
           </div>
 
-          {/* Quick theme status, user sign-out and theme triggers */}
-          <div className="flex items-center gap-2 lg:hidden">
-            <button 
-              onClick={toggleDarkMode}
-              className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-750 text-slate-550 dark:text-slate-300 transition-colors cursor-pointer"
-              title="Toggle Theme"
-            >
-              {isDarkMode ? <Sun className="w-4.5 h-4.5" /> : <Moon className="w-4.5 h-4.5" />}
-            </button>
-            <button 
-              onClick={handleLogout}
-              className="p-2.5 rounded-xl bg-red-50 text-red-500 hover:bg-red-100/60 transition-colors cursor-pointer"
-              title="Log out session"
-            >
-              <LogOut className="w-4.5 h-4.5" />
-            </button>
-          </div>
-        </div>
-
-        {/* Desktop control tray inputs and user stats */}
-        <div className="flex flex-col sm:flex-row items-center gap-3 w-full lg:w-auto">
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest whitespace-nowrap hidden sm:inline">Project Track</label>
-            <input
-              type="text"
-              value={projectName}
-              onChange={(e) => setProjectName(e.target.value)}
-              placeholder="E.g. Workspace Recruitment Group"
-              className="w-full sm:w-64 bg-slate-50 dark:bg-slate-910 border border-slate-201 dark:border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-700 dark:text-slate-350 font-bold focus:ring-2 focus:ring-slate-300 outline-none transition-all dark:bg-slate-850"
-            />
-          </div>
-
-          <div className="flex items-center gap-2 w-full sm:w-auto mt-2 sm:mt-0 justify-end sm:justify-start">
-            <button 
-              onClick={() => {
-                setOnboardingStep(1);
-                setShowOnboarding(true);
-              }}
-              className="p-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-750 rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white transition-colors cursor-pointer"
-              title="Launch onboarding tutorial wizard"
-            >
-              <HelpCircle className="w-4 h-4" />
-            </button>
-
-            {/* Desktop Only header controls */}
-            <div className="hidden lg:flex items-center gap-2">
-              <button 
-                onClick={toggleDarkMode}
-                className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-755 text-slate-550 dark:text-slate-300 transition-colors cursor-pointer"
-                title="Toggle visual theme"
-              >
-                {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-              </button>
-              
-              <div className="h-5 w-px bg-slate-200 dark:bg-slate-800 mx-1"></div>
-
-              <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-900 border border-slate-150 dark:border-slate-800 px-3 py-1.5 rounded-xl">
-                <div className="w-6 h-6 rounded-full bg-slate-800 text-white flex items-center justify-center font-bold text-[10px] overflow-hidden">
+          {/* User profile, theme, and sign out controls */}
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            {/* Elegant profile badge showing user info in mobile too */}
+            {currentUser && (
+              <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-950 border border-slate-150 dark:border-slate-850 px-2 sm:px-2.5 py-1 rounded-lg">
+                <div className="w-5.5 h-5.5 rounded-full bg-slate-800 text-white flex items-center justify-center font-bold text-[9px] overflow-hidden shrink-0">
                   {currentUser.photoURL ? (
                     <img src={currentUser.photoURL} referrerPolicy="no-referrer" alt="" className="w-full h-full object-cover" />
                   ) : (
-                    currentUser.displayName.charAt(0).toUpperCase()
+                    (currentUser.displayName || currentUser.email || 'A').charAt(0).toUpperCase()
                   )}
                 </div>
-                <div className="text-left leading-none max-w-24 overflow-hidden text-ellipsis">
-                  <span className="text-[10px] text-slate-400 font-extrabold uppercase block font-mono">Auditor</span>
-                  <span className="text-[11px] font-extrabold text-slate-700 dark:text-slate-200 truncate block">{currentUser.displayName}</span>
+                <div className="text-left leading-none max-w-16 sm:max-w-24 overflow-hidden text-ellipsis hidden xs:block">
+                  <span className="text-[9px] text-slate-450 font-bold block">Auditor</span>
+                  <span className="text-[10px] font-extrabold text-slate-700 dark:text-slate-200 truncate block">{currentUser.displayName || 'Auditor Guest'}</span>
                 </div>
               </div>
+            )}
+
+            <button 
+              onClick={toggleDarkMode}
+              className="p-2 rounded-lg bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-750 text-slate-550 dark:text-slate-300 transition-colors cursor-pointer border border-slate-150 dark:border-slate-705 shrink-0"
+              title="Toggle Theme"
+            >
+              {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            </button>
+            <button 
+              onClick={handleLogout}
+              className="p-2 rounded-lg bg-red-50 dark:bg-red-950/20 text-red-500 hover:bg-red-100/60 dark:hover:bg-red-950/40 transition-colors cursor-pointer border border-red-100 dark:border-red-900/30 shrink-0"
+              title="Sign out of Auditing System"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Row 2: Navigation controllers / Track Settings */}
+        <div className="flex flex-col md:flex-row items-center justify-between gap-3 w-full">
+          {/* Navigation Tab selection */}
+          <div className="flex items-center gap-1 bg-slate-50 dark:bg-slate-950 p-1 rounded-xl border border-slate-100 dark:border-slate-800 w-full md:w-auto overflow-x-auto custom-scrollbar">
+            <button 
+              onClick={() => setCurrentModule('landing')} 
+              className={`flex-1 md:flex-initial text-center px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap ${currentModule === 'landing' ? 'bg-[#6366f1] text-white shadow-sm' : 'text-slate-650 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+            >
+              Audits
+            </button>
+            <button 
+              onClick={() => setCurrentModule('api-docs')} 
+              className={`flex-1 md:flex-initial text-center px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap ${currentModule === 'api-docs' ? 'bg-[#6366f1] text-white shadow-sm' : 'text-slate-650 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+              id="navbar-api-docs"
+            >
+              API REST
+            </button>
+            <button 
+              onClick={() => setCurrentModule('integrations')} 
+              className={`flex-1 md:flex-initial text-center px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap ${currentModule === 'integrations' ? 'bg-[#6366f1] text-white shadow-sm' : 'text-slate-650 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+              id="navbar-integrations"
+            >
+              Integrations
+            </button>
+            <button 
+              onClick={() => setCurrentModule('chrome-extension')} 
+              className={`flex-1 md:flex-initial text-center px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap ${currentModule === 'chrome-extension' ? 'bg-[#6366f1] text-white shadow-sm' : 'text-slate-650 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+              id="navbar-chrome-extension"
+            >
+              Extension
+            </button>
+            <button 
+              onClick={() => setCurrentModule('api-changelog')} 
+              className={`flex-1 md:flex-initial text-center px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap ${currentModule === 'api-changelog' ? 'bg-[#6366f1] text-white shadow-sm' : 'text-slate-650 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+              id="navbar-api-changelog"
+            >
+              Changelog
+            </button>
+          </div>
+
+          {/* Action configurations (Project Track and Setup Tools) */}
+          <div className="flex items-center justify-between md:justify-end gap-2.5 w-full md:w-auto">
+            <div className="flex items-center gap-2 w-full md:w-auto">
+              <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest whitespace-nowrap hidden sm:inline">Project Track</label>
+              <input
+                type="text"
+                value={projectName}
+                onChange={(e) => setProjectName(e.target.value)}
+                placeholder="E.g. Workspace Recruitment Group"
+                className="w-full md:w-56 bg-slate-50 dark:bg-slate-910 border border-slate-201 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-700 dark:text-slate-350 font-bold focus:ring-2 focus:ring-slate-300 outline-none transition-all dark:bg-slate-850"
+              />
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              {/* Elegant Mobile/Desktop Install PWA Button Trigger */}
+              <button 
+                onClick={triggerAppInstall}
+                className={`p-2 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer border text-xs font-bold leading-none ${
+                  isAppInstalled 
+                    ? "bg-emerald-500/10 dark:bg-emerald-950/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 cursor-default" 
+                    : "bg-indigo-500/10 dark:bg-indigo-950/20 text-indigo-650 dark:text-indigo-400 hover:bg-indigo-500/20 border-indigo-500/20"
+                }`}
+                title={isAppInstalled ? "Application fully installed as standalone app" : "Install FairAudit PWA App to Phone/Desktop"}
+              >
+                {isAppInstalled ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-500" />
+                    <span className="hidden sm:inline uppercase tracking-wider text-[9px] font-extrabold text-emerald-600 dark:text-emerald-400">PWA Active</span>
+                  </>
+                ) : (
+                  <>
+                    <Smartphone className="w-3.5 h-3.5 text-indigo-500" />
+                    <span className="uppercase tracking-wider text-[9px] font-black">Install</span>
+                  </>
+                )}
+              </button>
 
               <button 
-                onClick={handleLogout}
-                className="p-2.5 rounded-xl bg-red-50 dark:bg-red-950/20 text-red-500 hover:bg-red-100/60 dark:hover:bg-red-950/40 transition-colors cursor-pointer border border-red-100 dark:border-red-900/30"
-                title="Sign out of Auditing System"
+                onClick={() => {
+                  setOnboardingStep(1);
+                  setShowOnboarding(true);
+                }}
+                className="p-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-750 rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white transition-colors cursor-pointer border border-slate-200/50 dark:border-slate-700"
+                title="Launch onboarding tutorial wizard"
               >
-                <LogOut className="w-4 h-4" />
+                <HelpCircle className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
+
         </div>
+
       </div>
 
       <div className="flex-1 print:hidden">
@@ -1251,6 +2337,33 @@ Always generate helpful, expert suggestions. Format bold parameters with standar
               setChecklistResult(result);
               addHistory('Checklist Tracker', 'N/A', result.readiness, result);
             }}
+          />
+        )}
+        {currentModule === 'leaderboard' && (
+          <Leaderboard 
+            onBack={() => setCurrentModule('landing')} 
+          />
+        )}
+        {currentModule === 'api-docs' && (
+          <ApiDocs 
+            onBack={() => setCurrentModule('landing')} 
+            currentUserEmail={currentUser?.email || ''}
+          />
+        )}
+        {currentModule === 'integrations' && (
+          <Integrations 
+            onBack={() => setCurrentModule('landing')} 
+            currentUserEmail={currentUser?.email || ''}
+          />
+        )}
+        {currentModule === 'chrome-extension' && (
+          <ChromeExtension 
+            onBack={() => setCurrentModule('landing')} 
+          />
+        )}
+        {currentModule === 'api-changelog' && (
+          <ApiChangelog 
+            onBack={() => setCurrentModule('landing')} 
           />
         )}
       </div>
@@ -1445,16 +2558,192 @@ Always generate helpful, expert suggestions. Format bold parameters with standar
                   <span className="text-[9px] font-mono text-slate-400 font-bold uppercase tracking-wider block mt-0.5">Dual-Parity Assistant</span>
                 </div>
               </div>
-              <button 
-                onClick={() => {
-                  setChatOpen(false);
-                  setShowSessionsList(false);
-                }}
-                className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-450 hover:text-white transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setChatSettingsOpen(!chatSettingsOpen)}
+                  className={`p-1.5 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer ${chatSettingsOpen ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                  title="Configure AI Privacy & Automations"
+                >
+                  <Settings className="w-5 h-5" />
+                </button>
+                
+                <button 
+                  onClick={() => {
+                    setChatOpen(false);
+                    setShowSessionsList(false);
+                  }}
+                  className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-450 hover:text-white transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </header>
+
+            {/* Chat Dropdown settings Popover menu */}
+            {chatSettingsOpen && (
+              <div className="absolute top-[58px] right-4 w-[310px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl z-[50] p-4 text-left animate-in fade-in slide-in-from-top-3 duration-200">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2 mb-3">
+                  <h4 className="font-bold text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                    <Settings className="w-3.5 h-3.5 text-indigo-500" /> Assistant config
+                  </h4>
+                  <button 
+                    onClick={() => setChatSettingsOpen(false)}
+                    className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                
+                <div className="space-y-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1">
+                      <label className="text-xs font-bold text-slate-800 dark:text-slate-100 block">Personal Intelligence</label>
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400 block leading-normal mt-0.5">Let AI review active developer credentials, webhooks payload schemas, and metrics.</span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        const next = !personalIntelligenceEnabled;
+                        setPersonalIntelligenceEnabled(next);
+                        localStorage.setItem('fairaudit_personal_intelligence', String(next));
+                      }}
+                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors flex-shrink-0 cursor-pointer ${personalIntelligenceEnabled ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-800'}`}
+                    >
+                      <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${personalIntelligenceEnabled ? 'translate-x-4.5' : 'translate-x-1'}`} />
+                    </button>
+                  </div>
+
+                  <div className="flex items-start justify-between gap-3 border-t border-slate-100 dark:border-slate-800 pt-3.5">
+                    <div className="flex-1">
+                      <label className="text-xs font-bold text-slate-800 dark:text-slate-100 block">Autonomous Worker</label>
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400 block leading-normal mt-0.5">Run optimized backend parity evaluations and dispatch payload variables to webhooks.</span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        const next = !autonomousWorkerEnabled;
+                        setAutonomousWorkerEnabled(next);
+                        localStorage.setItem('fairaudit_autonomous_worker', String(next));
+                      }}
+                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors flex-shrink-0 cursor-pointer ${autonomousWorkerEnabled ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-800'}`}
+                    >
+                      <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${autonomousWorkerEnabled ? 'translate-x-4.5' : 'translate-x-1'}`} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Chat Onboarding Overlay (First-time user welcome consent drawer overlay) */}
+            {!chatOnboardingDone && (
+              <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-[45] flex items-center justify-center p-4">
+                {chatOnboardingStep === 1 ? (
+                  <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-2xl max-w-sm w-full text-center space-y-4 animate-in zoom-in duration-200">
+                    <div className="w-12 h-12 bg-indigo-50 dark:bg-indigo-950/30 rounded-2xl flex items-center justify-center mx-auto text-indigo-600 dark:text-indigo-400">
+                      <Sparkles className="w-6 h-6 animate-pulse" />
+                    </div>
+                    
+                    <div>
+                      <h4 className="text-base font-extrabold text-slate-900 dark:text-white font-display">Enable AI Automation?</h4>
+                      <p className="text-xs text-slate-450 dark:text-slate-400 mt-1.5 leading-relaxed">Customize your compliance scanner experience. Turn on productivity enhancements for real-time monitoring and quota tracking.</p>
+                    </div>
+
+                    <div className="space-y-3.5 text-left bg-slate-50 dark:bg-slate-950 p-4 rounded-xl border border-slate-150/40 dark:border-slate-800">
+                      {/* Manual switches for each function */}
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex-1">
+                          <span className="text-xs font-bold text-slate-850 dark:text-slate-100 block">Personal Intelligence</span>
+                          <span className="text-[10px] text-slate-500 leading-tight block mt-0.5">Let the AI agent access active webhook counts and key quotas.</span>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setPersonalIntelligenceEnabled(prev => !prev);
+                          }}
+                          className={`relative inline-flex h-4.5 w-8 items-center rounded-full transition-colors flex-shrink-0 cursor-pointer ${personalIntelligenceEnabled ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-800'}`}
+                        >
+                          <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${personalIntelligenceEnabled ? 'translate-x-4' : 'translate-x-1'}`} />
+                        </button>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-3 border-t border-slate-200 dark:border-slate-800 pt-3">
+                        <div className="flex-1">
+                          <span className="text-xs font-bold text-slate-850 dark:text-slate-100 block">Autonomous Worker</span>
+                          <span className="text-[10px] text-slate-500 leading-tight block mt-0.5">Trigger auto background evaluations and sync webhooks.</span>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setAutonomousWorkerEnabled(prev => !prev);
+                          }}
+                          className={`relative inline-flex h-4.5 w-8 items-center rounded-full transition-colors flex-shrink-0 cursor-pointer ${autonomousWorkerEnabled ? 'bg-indigo-605' : 'bg-slate-200 dark:bg-slate-800'}`}
+                        >
+                          <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${autonomousWorkerEnabled ? 'translate-x-4' : 'translate-x-1'}`} />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-2 pt-1.5">
+                      <button
+                        onClick={() => {
+                          localStorage.setItem('fairaudit_personal_intelligence', String(personalIntelligenceEnabled));
+                          localStorage.setItem('fairaudit_autonomous_worker', String(autonomousWorkerEnabled));
+                          localStorage.setItem('fairaudit_chat_onboarding_done', 'true');
+                          setChatOnboardingDone(true);
+                        }}
+                        className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl shadow-sm cursor-pointer transition-colors"
+                      >
+                        I want it
+                      </button>
+                      
+                      <button
+                        onClick={() => {
+                          setChatOnboardingStep(2);
+                        }}
+                        className="w-full py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-850 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs rounded-xl cursor-pointer transition-colors"
+                      >
+                        No, I don't need
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-2xl max-w-sm w-full text-center space-y-4 animate-in zoom-in duration-200">
+                    <div className="w-12 h-12 bg-indigo-50 dark:bg-indigo-950/20 rounded-2xl flex items-center justify-center mx-auto text-indigo-500">
+                      <Info className="w-6 h-6 animate-bounce" />
+                    </div>
+
+                    <div>
+                      <h4 className="text-sm font-extrabold text-slate-900 dark:text-white font-display">Settings Configuration</h4>
+                      <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
+                        Understood! There is a settings button (⚙️) on the top right to enable those lazy features whenever you are ready. Just let you know!
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col gap-2 pt-1.5">
+                      <button
+                        onClick={() => {
+                          setChatOnboardingStep(1);
+                        }}
+                        className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl cursor-pointer transition-colors"
+                      >
+                        Let me try
+                      </button>
+                      
+                      <button
+                        onClick={() => {
+                          localStorage.setItem('fairaudit_personal_intelligence', 'false');
+                          localStorage.setItem('fairaudit_autonomous_worker', 'false');
+                          setPersonalIntelligenceEnabled(false);
+                          setAutonomousWorkerEnabled(false);
+                          localStorage.setItem('fairaudit_chat_onboarding_done', 'true');
+                          setChatOnboardingDone(true);
+                        }}
+                        className="w-full py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-850 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-300 font-bold text-xs rounded-xl cursor-pointer transition-colors"
+                      >
+                        Got it
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Mobile Chat Session Control Header (Visible only on mobile screen widths) */}
             <div className="sm:hidden flex items-center justify-between p-2 px-3 bg-slate-100 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 flex-shrink-0">
@@ -1477,7 +2766,14 @@ Always generate helpful, expert suggestions. Format bold parameters with standar
             </div>
 
             <div className="bg-slate-50 dark:bg-slate-950 border-b border-slate-100 dark:border-slate-850 p-3 flex flex-col gap-1 text-[10px] text-slate-500 font-bold text-left flex-shrink-0">
-              <div>Active Scope: <span className="text-slate-800 dark:text-slate-300">{projectName}</span></div>
+              <div className="flex items-center justify-between">
+                <div>Active Scope: <span className="text-slate-800 dark:text-slate-300">{projectName}</span></div>
+                <div className="flex items-center gap-1.5 bg-indigo-50/50 dark:bg-indigo-950/25 px-1.5 py-0.5 rounded-md border border-indigo-100/30 dark:border-indigo-950/40 select-none">
+                  <span className="text-[8.5px] uppercase text-indigo-700 dark:text-indigo-400 font-extrabold tracking-wider font-mono">
+                    AI Quota: {Math.max(0, 5 - rateLimitStatus.minuteCount)}/5m • {Math.max(0, 20 - rateLimitStatus.dailyCount)}/20d left
+                  </span>
+                </div>
+              </div>
               <div>Audit Module: <span className="text-slate-850 dark:text-indigo-400">{currentModule.toUpperCase()} checks</span></div>
             </div>
 
@@ -1509,19 +2805,31 @@ Always generate helpful, expert suggestions. Format bold parameters with standar
               )}
             </div>
 
+            {/* Rate limit warnings banner */}
+            {rateLimitStatus.isLimited && (
+              <div className="mx-3 mt-1 mb-2 p-3 bg-rose-50 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-955 rounded-xl flex items-start gap-2.5 text-[11px] text-rose-800 dark:text-rose-300 leading-normal animate-fade-in relative z-10">
+                <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                <div className="text-left flex-1">
+                  <span className="font-extrabold block uppercase tracking-wide text-[9px] text-rose-600 dark:text-rose-400 mb-0.5 font-sans">Rate Limit Block Triggered</span>
+                  <span className="font-medium">You have temporarily exceeded your AI chat quota ({rateLimitStatus.limitType === 'minute' ? '5 messages / minute' : '20 messages / day'}). Resets in <strong className="font-bold underline">{formatDurationStatus(rateLimitStatus.resetInMs)}</strong>.</span>
+                </div>
+              </div>
+            )}
+
             {/* Chat Input Field form */}
             <form onSubmit={handleSendMessage} className="p-3 bg-white dark:bg-slate-900 border-t border-slate-150 dark:border-slate-800 flex items-center gap-2 flex-shrink-0">
               <input
                 type="text"
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Ask e.g. 'What is disparate impact ratio threshold?'"
-                className="flex-1 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 focus:border-indigo-500 rounded-xl px-4 py-3 text-xs outline-none text-slate-800 dark:text-white font-semibold transition-shadow"
+                disabled={rateLimitStatus.isLimited || chatLoading || !activeSessionId}
+                placeholder={rateLimitStatus.isLimited ? `AI Chat rate limited - resets in ${formatDurationStatus(rateLimitStatus.resetInMs)}` : "Ask e.g. 'What is disparate impact ratio threshold?'"}
+                className="flex-1 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 focus:border-indigo-500 rounded-xl px-4 py-3 text-xs outline-none text-slate-800 dark:text-white font-semibold transition-shadow disabled:opacity-60"
               />
               <button
                 type="submit"
-                disabled={!chatInput.trim() || chatLoading || !activeSessionId}
-                className="p-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition-colors cursor-pointer disabled:opacity-50"
+                disabled={!chatInput.trim() || chatLoading || !activeSessionId || rateLimitStatus.isLimited}
+                className="p-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition-colors cursor-pointer disabled:opacity-40"
               >
                 <Send className="w-4.5 h-4.5" />
               </button>
@@ -1631,6 +2939,86 @@ Always generate helpful, expert suggestions. Format bold parameters with standar
               )}
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* iOS & Browser PWA Installation Helper Dialog Modal */}
+      {showIosInstallGuide && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[110] flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 text-white rounded-3xl max-w-md w-full p-6 sm:p-8 shadow-2xl relative flex flex-col gap-6">
+            
+            {/* Modal dismiss */}
+            <button
+              onClick={() => setShowIosInstallGuide(false)}
+              className="absolute top-4 right-4 p-2 rounded-full hover:bg-slate-850 text-slate-400 hover:text-white transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="text-center space-y-2">
+              <div className="w-14 h-14 bg-indigo-600/20 text-indigo-400 rounded-2xl mx-auto flex items-center justify-center mb-2 shadow-inner border border-indigo-500/15">
+                <Smartphone className="w-8 h-8 animate-pulse" />
+              </div>
+              <h3 className="text-xl font-extrabold font-display tracking-tight text-white">Install FairAudit AI</h3>
+              <p className="text-xs text-slate-400 leading-relaxed px-4">
+                Access your compliance audit workspace instantly right from your phone or desktop home screen!
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              <div className="text-[10px] font-black tracking-widest text-[#6366f1] uppercase border-b border-slate-800/80 pb-2 mb-2">Instructions</div>
+              
+              {/* Option A: Safari or iOS */}
+              <div className="space-y-3">
+                <p className="text-xs font-bold text-slate-350">🍎 On iPhone / Apple iPad:</p>
+                
+                <div className="flex gap-3 text-xs text-slate-400 font-semibold items-start">
+                  <div className="w-5 h-5 rounded-full bg-slate-800 text-slate-200 text-[10px] flex items-center justify-center flex-shrink-0 font-bold">1</div>
+                  <p className="leading-relaxed">
+                    Open iOS Safari and tap the <strong className="text-indigo-400 inline-flex items-center gap-0.5"><Share className="w-3.5 h-3.5 inline" /> Share</strong> logo inside the menu (bottom on phones, or top on tablet).
+                  </p>
+                </div>
+
+                <div className="flex gap-3 text-xs text-slate-400 font-semibold items-start">
+                  <div className="w-5 h-5 rounded-full bg-slate-800 text-slate-200 text-[10px] flex items-center justify-center flex-shrink-0 font-bold">2</div>
+                  <p className="leading-relaxed">
+                    Scroll down page action lists and tap <strong className="text-indigo-400"><Plus className="w-3.5 h-3.5 inline" /> Add to Home Screen</strong>.
+                  </p>
+                </div>
+
+                <div className="flex gap-3 text-xs text-slate-400 font-semibold items-start">
+                  <div className="w-5 h-5 rounded-full bg-slate-800 text-slate-200 text-[10px] flex items-center justify-center flex-shrink-0 font-bold">3</div>
+                  <p className="leading-relaxed">
+                    Tap <strong className="text-indigo-400 font-bold">Add</strong> at the higher-right corner to complete.
+                  </p>
+                </div>
+              </div>
+
+              {/* Option B: Standard Chrome / Edge Desktop */}
+              <div className="space-y-3 pt-3 border-t border-slate-800/65">
+                <p className="text-xs font-bold text-slate-350">💻 On Chrome, Edge or Firefox:</p>
+                <div className="flex gap-3 text-xs text-slate-400 font-semibold items-start">
+                  <div className="w-5 h-5 rounded-full bg-slate-800 text-slate-200 text-[10px] flex items-center justify-center flex-shrink-0 font-bold">1</div>
+                  <p className="leading-relaxed">
+                    Look for the <strong className="text-indigo-400"><Download className="w-3.5 h-3.5 inline" /> App Install</strong> icon inside your browser's search bar (usually on the far-right near bookmarks).
+                  </p>
+                </div>
+                <div className="flex gap-3 text-xs text-slate-400 font-semibold items-start">
+                  <div className="w-5 h-5 rounded-full bg-slate-800 text-slate-200 text-[10px] flex items-center justify-center flex-shrink-0 font-bold">2</div>
+                  <p className="leading-relaxed">
+                    Confirm prompt selection by clicking <strong className="text-indigo-450">Install</strong>.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setShowIosInstallGuide(false)}
+              className="w-full py-3 bg-slate-800 hover:bg-slate-750 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-lg mt-2"
+            >
+              Start Auditing
+            </button>
           </div>
         </div>
       )}

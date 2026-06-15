@@ -4,11 +4,13 @@ import {
   Activity, BrainCircuit, Loader2, ArrowLeft, ShieldCheck, 
   AlertTriangle, AlertCircle, Download, Award, Share2, Clipboard, RefreshCcw, FileText 
 } from 'lucide-react';
-import { Type } from '@google/genai';
+import { Type } from '../lib/gemini';
 import { ChecklistResult } from './Checklist';
 import { generateContentWithFallback } from '../lib/gemini';
 import { DbService } from '../lib/db';
 import { ComplianceItem } from '../types';
+import BiasDna, { DnaAttribute } from './BiasDna';
+
 
 export interface WhatIfScenario {
   attribute_changed: string;
@@ -71,6 +73,173 @@ export default function DecisionAudit({ onBack, checklistResult, onAuditComplete
   const [shareUrl, setShareUrl] = useState<string>('');
   const [sharing, setSharing] = useState(false);
 
+  // --- IMPACT ESTIMATOR STATE ---
+  const [volumeIndex, setVolumeIndex] = useState<number>(2); // defaults to index 2 (10,000)
+
+  // --- DRAMATIC REVEAL ANIMATION STATES ---
+  const [revealStage, setRevealStage] = useState<'idle' | 'analyzing' | 'counting' | 'flash' | 'revealed' | 'complete'>('idle');
+  const [animatedScore, setAnimatedScore] = useState(0);
+  const [visibleFlaggedCount, setVisibleFlaggedCount] = useState(0);
+
+  // Step 2: Numbers count up from 0 to final bias score (duration 1.2s)
+  React.useEffect(() => {
+    if (revealStage === 'counting') {
+      const target = activeTab === 'single'
+        ? (result ? (result.model_risk_level === 'HIGH' ? 85 : result.model_risk_level === 'MEDIUM' ? 45 : 15) : 15)
+        : (compareResult ? (compareResult.bias_verdict === 'CONFIRMED' ? 95 : compareResult.bias_verdict === 'POSSIBLE' ? 55 : 15) : 15);
+      
+      const finalScore = target || 15;
+      let current = 0;
+      const duration = 1200; // 1.2 seconds counting up
+      const intervalTime = 30; // ms per step
+      const steps = duration / intervalTime;
+      const increment = finalScore / steps;
+
+      const timer = setInterval(() => {
+        current += increment;
+        if (current >= finalScore) {
+          setAnimatedScore(finalScore);
+          clearInterval(timer);
+          setRevealStage('flash');
+        } else {
+          setAnimatedScore(Math.floor(current));
+        }
+      }, intervalTime);
+
+      return () => clearInterval(timer);
+    }
+  }, [revealStage, result, compareResult, activeTab]);
+
+  // Step 3: Screen briefly flashes colour border for verdict (duration 0.9s)
+  React.useEffect(() => {
+    if (revealStage === 'flash') {
+      const timer = setTimeout(() => {
+        setRevealStage('revealed');
+      }, 900); // 900ms flash
+      return () => clearTimeout(timer);
+    }
+  }, [revealStage]);
+
+  // Step 4: Each flagged column appears one by one with a short delay
+  React.useEffect(() => {
+    if (revealStage === 'revealed') {
+      const totalFlags = activeTab === 'single'
+        ? (result?.flaggedAttributes?.length || 0)
+        : (compareResult?.attribute_changed ? 1 : 0);
+
+      if (totalFlags > 0) {
+        let count = 0;
+        const timer = setInterval(() => {
+          count += 1;
+          if (count >= totalFlags) {
+            setVisibleFlaggedCount(totalFlags);
+            clearInterval(timer);
+            setRevealStage('complete');
+          } else {
+            setVisibleFlaggedCount(count);
+          }
+        }, 500); // 500ms delay between elements appearing
+        return () => clearInterval(timer);
+      } else {
+        setRevealStage('complete');
+      }
+    }
+  }, [revealStage, result, compareResult, activeTab]);
+
+  // --- REAL-TIME BIAS SPEEDOMETER STATE ---
+  const [liveScore, setLiveScore] = useState(0);
+  const [liveReason, setLiveReason] = useState('Start typing candidate attributes (like gender, race, location) to see real-time bias probabilities!');
+  const [isLiveEvaluating, setIsLiveEvaluating] = useState(false);
+
+  // Instant local semantic evaluation model to save API quota and provide zero-latency updates
+  React.useEffect(() => {
+    const textToEvaluate = activeTab === 'single'
+      ? (inputData + ' ' + decisionContext).trim()
+      : (inputDataA + ' ' + decisionA + ' ' + inputDataB + ' ' + decisionB).trim();
+
+    if (!textToEvaluate || textToEvaluate.length < 5) {
+      setLiveScore(0);
+      setLiveReason('Start typing candidate attributes (like gender, race, location) to see real-time bias probabilities!');
+      setIsLiveEvaluating(false);
+      return;
+    }
+
+    setIsLiveEvaluating(true);
+
+    const delayDebounceFn = setTimeout(() => {
+      const lowercase = textToEvaluate.toLowerCase();
+      let score = 5; // stable neutral threshold
+      const indicators: string[] = [];
+
+      // 1. Gender attributes
+      const genderTerms = ['female', 'woman', 'women', 'girl', 'gender', 'male', 'man', 'men', 'boy', 'sex', 'pregnancy', 'pregnant', 'maternity', 'paternity'];
+      const matchedGender = genderTerms.filter(t => lowercase.includes(t));
+      if (matchedGender.length > 0) {
+        score += matchedGender.length * 15;
+        indicators.push('gender/sex criteria');
+      }
+
+      // 2. Race & Ethnicity markers
+      const raceTerms = ['black', 'african american', 'latino', 'hispanic', 'asian', 'ethnic', 'white', 'minority', 'race', 'color', 'indigenous', 'caucasian', 'nationality'];
+      const matchedRace = raceTerms.filter(t => lowercase.includes(t));
+      if (matchedRace.length > 0) {
+        score += matchedRace.length * 20;
+        indicators.push('racial/ethnic identifiers');
+      }
+
+      // 3. Location & ZIP proxies (redlining markers)
+      const locTerms = ['zip', 'postal', 'neighborhood', 'address', 'location', 'area code', 'proximity', 'distance', 'commute', 'ghetto', 'slum', 'affluent'];
+      const matchedLoc = locTerms.filter(t => lowercase.includes(t));
+      if (matchedLoc.length > 0) {
+        score += matchedLoc.length * 18;
+        indicators.push('geographic proxies (ZIP code)');
+      }
+
+      // 4. Ageism bias markers
+      const ageTerms = ['age', 'years old', 'elderly', 'younger', 'older', 'retired', 'senior', 'millennial', 'gen-z', 'boomer', 'fresh graduate', 'overqualified', 'youngist'];
+      const matchedAge = ageTerms.filter(t => lowercase.includes(t));
+      if (matchedAge.length > 0) {
+        score += matchedAge.length * 15;
+        indicators.push('age-bias indicators');
+      }
+
+      // 5. Subjective qualitative traits (proxies for personal bias)
+      const subjectiveTerms = ['culture fit', 'accent', 'vibe', 'attitude', 'aggressive', 'gut feeling', 'chemistry', 'personality', 'articulate', 'polished', 'energy', 'friendly'];
+      const matchedSubjective = subjectiveTerms.filter(t => lowercase.includes(t));
+      if (matchedSubjective.length > 0) {
+        score += matchedSubjective.length * 15;
+        indicators.push('highly subjective factors');
+      }
+
+      // 6. Disability & Health indicators
+      const healthTerms = ['disabled', 'disability', 'wheelchair', 'deaf', 'blind', 'medical', 'illness', 'therapy', 'autistic', 'neurodivergent'];
+      const matchedHealth = healthTerms.filter(t => lowercase.includes(t));
+      if (matchedHealth.length > 0) {
+        score += matchedHealth.length * 18;
+        indicators.push('health/disability markers');
+      }
+
+      score = Math.min(100, score);
+
+      let reason = 'Strictly objective. The attributes analyzed correspond to general professional and numeric outputs.';
+      if (score > 70) {
+        reason = `Critical risk! Found multiple redline proxies or protected criteria: ${indicators.join(', ')}. Disparate impact is highly probable; direct revision of features required.`;
+      } else if (score > 40) {
+        reason = `Attention recommended. Detected localized proxy attributes: ${indicators.join(', ')}. Evaluate correlations with historical bias metrics.`;
+      } else if (score > 15) {
+        reason = `Satisfactory. Minimal correlation to standard protected classes. Low exposure risk evaluated by local auditor logic.`;
+      }
+
+      setLiveScore(score);
+      setLiveReason(reason);
+      setIsLiveEvaluating(false);
+    }, 150); // super snappy 150ms simulated model latency
+
+    return () => {
+      clearTimeout(delayDebounceFn);
+    };
+  }, [inputData, decisionContext, inputDataA, decisionA, inputDataB, decisionB, activeTab]);
+
   const toggleTrainingDataOption = (option: string) => {
     if (option === 'None of the above') {
       setTrainingDataIncludes(['None of the above']);
@@ -97,6 +266,13 @@ export default function DecisionAudit({ onBack, checklistResult, onAuditComplete
     setCompareResult(null);
     setError(null);
     setShareId(null);
+    setLiveScore(0);
+    setLiveReason('Start typing candidate attributes (like gender, race, location) to see real-time bias probabilities!');
+    setIsLiveEvaluating(false);
+    // Reset animation controllers
+    setRevealStage('idle');
+    setAnimatedScore(0);
+    setVisibleFlaggedCount(0);
   };
 
   // Pre-fill handlers (Fulfilling: Every new feature must work with the 'Try an Example' button)
@@ -126,6 +302,11 @@ export default function DecisionAudit({ onBack, checklistResult, onAuditComplete
       setError(null);
       setResult(null);
       setShareId(null);
+      
+      setRevealStage('analyzing');
+      setAnimatedScore(0);
+      setVisibleFlaggedCount(0);
+      const auditStartTime = Date.now();
 
       try {
         const responseSchema = {
@@ -211,14 +392,24 @@ Audit this decision and provide a plain-English explanation that a 16-year-old c
         }
 
         const parsedData = JSON.parse(response.text.trim()) as AuditResult;
+
+        // Enforce Step 1 Sweep Scanner duration for dramatic video presentations (at least 1.6s)
+        const elapsedSinceAuditStart = Date.now() - auditStartTime;
+        const minScanningTime = 1600;
+        if (elapsedSinceAuditStart < minScanningTime) {
+          await new Promise(resolve => setTimeout(resolve, minScanningTime - elapsedSinceAuditStart));
+        }
+
         setResult(parsedData);
         setStatus('done');
+        setRevealStage('counting');
         onAuditComplete?.(
           parsedData.model_risk_level === 'HIGH' ? 85 : 20, 
           parsedData.decision_fairness, 
           parsedData
         );
       } catch (err: any) {
+        setRevealStage('idle');
         console.error(err);
         setError(err?.message || "An error occurred during the audit.");
         setStatus('idle');
@@ -230,6 +421,11 @@ Audit this decision and provide a plain-English explanation that a 16-year-old c
       setError(null);
       setCompareResult(null);
       setShareId(null);
+
+      setRevealStage('analyzing');
+      setAnimatedScore(0);
+      setVisibleFlaggedCount(0);
+      const auditStartTime = Date.now();
 
       try {
         const responseSchema = {
@@ -268,14 +464,24 @@ Audit this decision and provide a plain-English explanation that a 16-year-old c
         });
 
         const parsedData = JSON.parse(response.text.trim()) as CompareAuditResult;
+
+        // Enforce Step 1 Sweep Scanner duration for dramatic video presentations (at least 1.6s)
+        const elapsedSinceAuditStart = Date.now() - auditStartTime;
+        const minScanningTime = 1600;
+        if (elapsedSinceAuditStart < minScanningTime) {
+          await new Promise(resolve => setTimeout(resolve, minScanningTime - elapsedSinceAuditStart));
+        }
+
         setCompareResult(parsedData);
         setStatus('done');
+        setRevealStage('counting');
         onAuditComplete?.(
           parsedData.bias_verdict === 'CONFIRMED' ? 95 : parsedData.bias_verdict === 'POSSIBLE' ? 55 : 15,
           parsedData.bias_verdict,
           parsedData
         );
       } catch (err: any) {
+        setRevealStage('idle');
         console.error(err);
         setError("Failed to resolve decisions comparative metrics. Double-check raw formats.");
         setStatus('idle');
@@ -349,6 +555,21 @@ Audit this decision and provide a plain-English explanation that a 16-year-old c
 
     return list;
   }, [attributesDirectInputs, result, compareResult]);
+
+  // Compute final displays for Live Speedometer
+  const displayedScore = (status === 'done' && (revealStage === 'counting' || revealStage === 'flash' || revealStage === 'revealed' || revealStage === 'complete'))
+    ? animatedScore
+    : liveScore;
+
+  const displayedReason = (status === 'done' && (revealStage === 'flash' || revealStage === 'revealed' || revealStage === 'complete'))
+    ? (activeTab === 'single'
+        ? (result ? result.explanation : liveReason)
+        : (compareResult ? compareResult.explanation : liveReason))
+    : (revealStage === 'counting'
+        ? 'Assembling demographic correlation matrices... Scanning bias weight inputs...'
+        : liveReason);
+
+  const isDanger = displayedScore > 70;
 
   return (
     <div className="flex flex-col h-full print:bg-white print:h-auto px-4 md:px-0">
@@ -558,17 +779,208 @@ Audit this decision and provide a plain-English explanation that a 16-year-old c
         </div>
 
         {/* Right Panel: Output */}
-        <div className="bg-white rounded-3xl p-6 md:p-8 shadow-[0_2px_8px_rgba(0,0,0,0.03)] border border-slate-100 flex flex-col relative overflow-hidden h-[800px] lg:h-auto print:border-none print:shadow-none print:p-0 print:h-auto">
-          {status === 'idle' && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-50/20 z-10 p-8 text-center text-slate-405 m-3 rounded-2xl border border-slate-50">
-              <Activity className="w-12 h-12 text-slate-300 mb-4" />
-              <p className="font-bold text-slate-705">Provide decision settings to trace bias.</p>
-              <p className="text-xs text-slate-400 mt-2">The auditor compares weight distributions and flags prohibited proxy factors.</p>
-            </div>
-          )}
+        <div 
+          className={`bg-white rounded-3xl p-6 md:p-8 shadow-[0_2px_8px_rgba(0,0,0,0.03)] border flex flex-col relative h-[850px] lg:h-auto overflow-y-auto print:border-none print:shadow-none print:p-0 print:h-auto transition-all duration-300 ${
+            revealStage === 'flash'
+              ? (isDanger ? 'animate-flash-red border-red-500 ring-4 ring-red-500/20' : 'animate-flash-green border-green-500 ring-4 ring-green-500/20')
+              : 'border-slate-100'
+          }`}
+        >
+          <style>{`
+            @keyframes sweep {
+              0% { transform: translateY(0%); opacity: 0.3; }
+              50% { transform: translateY(750%); opacity: 1; }
+              100% { transform: translateY(0%); opacity: 0.3; }
+            }
+            @keyframes borderFlashRed {
+              0%, 100% { border-color: rgba(241, 245, 249, 1); box-shadow: none; }
+              50% { border-color: rgba(239, 68, 68, 0.9); box-shadow: 0 0 25px rgba(239, 68, 68, 0.35); }
+            }
+            @keyframes borderFlashGreen {
+              0%, 100% { border-color: rgba(241, 245, 249, 1); box-shadow: none; }
+              50% { border-color: rgba(34, 197, 94, 0.9); box-shadow: 0 0 25px rgba(34, 197, 94, 0.35); }
+            }
+            .animate-sweep-line {
+              animation: sweep 2.2s ease-in-out infinite;
+            }
+            .animate-flash-red {
+              animation: borderFlashRed 0.9s ease-in-out;
+            }
+            .animate-flash-green {
+              animation: borderFlashGreen 0.9s ease-in-out;
+            }
+          `}</style>
 
-          {status === 'done' && (
-            <div className="flex-1 flex flex-col overflow-y-auto pr-1">
+          {revealStage === 'analyzing' || status === 'auditing' ? (
+            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center relative overflow-hidden bg-slate-50/20 border border-slate-100 rounded-2xl min-h-[420px] my-auto">
+              {/* Blur background mockup cards to emphasize the sweep line scanning a record */}
+              <div className="absolute inset-x-8 top-12 bottom-12 filter blur-md opacity-15 select-none pointer-events-none flex flex-col gap-4">
+                <div className="h-10 bg-slate-400 rounded-xl w-3/4"></div>
+                <div className="h-28 bg-slate-400 rounded-xl"></div>
+                <div className="h-20 bg-slate-400 rounded-xl w-5/6"></div>
+                <div className="h-24 bg-slate-400 rounded-xl"></div>
+              </div>
+
+              {/* Sweeping scan bar animation */}
+              <div className="absolute inset-x-0 top-3 w-full h-1 bg-gradient-to-r from-transparent via-indigo-500 to-transparent opacity-85 shadow-[0_0_12px_#6366f1] animate-sweep-line" />
+
+              <div className="relative z-10 flex flex-col items-center animate-pulse">
+                <div className="inline-flex p-3 bg-indigo-50 border border-indigo-100/60 rounded-2xl mb-4 text-indigo-600">
+                  <BrainCircuit className="w-8 h-8 animate-spin" style={{ animationDuration: '3.5s' }} />
+                </div>
+                <h3 className="text-sm font-extrabold text-[#111827] tracking-tight uppercase">FairAudit AI is analyzing...</h3>
+                <p className="text-xs text-slate-450 mt-2 max-w-xs leading-relaxed">
+                  Decentralized decision auditing engine is inspecting proxies, historic weights, disparate values, and demographic correlations.
+                </p>
+                <div className="mt-8 flex flex-col gap-1.5 w-48 text-[9px] font-mono text-slate-400 uppercase font-black">
+                  <div className="flex justify-between">
+                    <span>1. Scenario Checks</span>
+                    <span className="text-indigo-600 animate-pulse">Processing</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>2. Counterfactuals</span>
+                    <span className="text-slate-300 font-bold">Pending</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Real-time speedometer gauge (always visible at top of output once we clear analyzing stage) */}
+              <div className="mb-6 flex flex-col gap-4">
+                <div className={`bg-white rounded-3xl p-6 border transition-all duration-300 ${
+                  isDanger 
+                    ? 'border-red-200 bg-red-50/5 shadow-[0_4px_24px_rgba(239,68,68,0.08)] ring-4 ring-red-500/5' 
+                    : displayedScore > 40 
+                      ? 'border-yellow-250 bg-yellow-50/5 shadow-[0_4px_20px_rgba(234,179,8,0.04)]' 
+                      : 'border-slate-100 bg-white shadow-[0_2px_8px_rgba(0,0,0,0.02)]'
+                }`}>
+                  {/* Visual Header */}
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2">
+                      <div className={`w-2.5 h-2.5 rounded-full ${
+                        isDanger ? 'bg-red-500 animate-ping' : isLiveEvaluating ? 'bg-indigo-500 animate-pulse' : 'bg-green-500'
+                      }`} />
+                      <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-500">
+                        {isLiveEvaluating 
+                          ? 'Scanning Bias Real-Time...' 
+                          : status === 'done' 
+                            ? 'Audited Bias Risk Score' 
+                            : 'Live Real-Time Bias Risk Meter'}
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-400">
+                      {status === 'done' ? 'Full Audit Compiled' : 'Local Semantic Engine'}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-col md:flex-row items-center gap-6">
+                    {/* SVG Speedometer Dial Container */}
+                    <div className="flex flex-col items-center justify-center flex-shrink-0 bg-slate-50/40 rounded-2xl p-4 border border-slate-100/80 w-[200px]">
+                      <div className="relative w-[180px] h-[100px] flex items-center justify-center overflow-hidden">
+                        <svg viewBox="0 0 200 115" className="w-full h-full">
+                          <defs>
+                            <linearGradient id="gaugeGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                              <stop offset="0%" stopColor="#22c55e" />
+                              <stop offset="50%" stopColor="#eab308" />
+                              <stop offset="100%" stopColor="#ef4444" />
+                            </linearGradient>
+                          </defs>
+                          
+                          {/* Track */}
+                          <path 
+                            d="M 30 105 A 70 70 0 0 1 170 105" 
+                            fill="none" 
+                            stroke="#f1f5f9" 
+                            strokeWidth="12" 
+                            strokeLinecap="round"
+                          />
+                          
+                          {/* Fill active arc */}
+                          <path 
+                            d="M 30 105 A 70 70 0 0 1 170 105" 
+                            fill="none" 
+                            stroke="url(#gaugeGradient)" 
+                            strokeWidth="12" 
+                            strokeLinecap="round"
+                            strokeDasharray="220"
+                            strokeDashoffset={220 - (displayedScore / 100) * 220}
+                            className="transition-all duration-700 ease-out"
+                          />
+
+                          {/* Pivot Center point */}
+                          <circle cx="100" cy="105" r="7" className={isDanger ? 'fill-red-600' : 'fill-slate-700'} />
+                          <circle cx="100" cy="105" r="3" fill="#fff" />
+
+                          {/* Needle */}
+                          <line 
+                            x1="100" y1="105" 
+                            x2="100" y2="45" 
+                            stroke={isDanger ? '#ef4444' : displayedScore > 40 ? '#eab308' : '#22c55e'} 
+                            strokeWidth="3.5" 
+                            strokeLinecap="round"
+                            style={{
+                              transform: `rotate(${-90 + (displayedScore / 100) * 180}deg)`,
+                              transformOrigin: '100px 105px',
+                              transition: 'transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1)'
+                            }}
+                          />
+                        </svg>
+                      </div>
+                      
+                      {/* Big Score placed below the dial with absolutely no overlap */}
+                      <div className="text-center flex flex-col items-center mt-2">
+                        <span className={`text-3xl font-black tracking-tight ${
+                          isDanger ? 'text-red-600 animate-pulse' : displayedScore > 40 ? 'text-yellow-600' : 'text-green-600'
+                        }`}>
+                          {displayedScore}%
+                        </span>
+                        <span className="text-[9px] uppercase tracking-wider font-extrabold text-slate-400 mt-1">
+                          {isDanger ? 'CRITICAL RISK' : displayedScore > 40 ? 'WARNING ZONE' : 'SAFE ZONE'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Live Reasoning content */}
+                    <div className="flex-1 min-w-0 flex flex-col justify-center">
+                      <div className="text-[10px] uppercase font-extrabold text-slate-400 mb-1">
+                        {status === 'done' ? 'Core Auditor Consensus' : 'Live Real-Time Auditor Reasoning'}
+                      </div>
+                      <p className={`text-xs leading-relaxed font-semibold transition-colors duration-150 ${
+                        isDanger ? 'text-red-700' : 'text-slate-600'
+                      }`}>
+                        {displayedReason}
+                      </p>
+                      
+                      {status !== 'done' && (
+                        <div className="mt-2.5 text-[9px] font-mono leading-normal text-slate-400 bg-slate-50 border border-slate-100 rounded-lg p-2 flex items-center gap-1.5">
+                          <div className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-pulse" />
+                          Type protected criteria (e.g. sex, race, location proxies) on the left to watch live danger zones light up.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {status === 'idle' && (
+                <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-400 border border-slate-50 rounded-2xl bg-slate-50/10 min-h-[220px]">
+                  <Activity className="w-10 h-10 text-slate-300 mb-3" />
+                  <p className="font-bold text-slate-705 text-sm">Sandbox Playground Ready</p>
+                  <p className="text-xs text-slate-400 mt-2 max-w-sm leading-relaxed text-center">
+                    As you type applicant records on the left, our Real-time Bias Monitor analyzes risk metrics dynamically.
+                  </p>
+                  <div className="mt-4 flex gap-2">
+                    <span className="text-[10px] bg-slate-100 border text-slate-500 font-bold px-2 py-1 rounded">Real-Time Evaluation Streamed</span>
+                    <span className="text-[10px] bg-indigo-50 border border-indigo-100 text-indigo-500 font-bold px-2 py-1 rounded">Gemini-3.5-Flash Active</span>
+                  </div>
+                </div>
+              )}
+
+              {status === 'done' && (revealStage === 'flash' || revealStage === 'revealed' || revealStage === 'complete') && (
+                <div className={`flex-1 flex flex-col overflow-y-auto pr-1 transition-all duration-500 ${
+                  revealStage === 'flash' ? 'opacity-30 filter blur-sm translate-y-2' : 'opacity-100 filter-none translate-y-0'
+                }`}>
               
               <div className="flex items-center justify-between border-b border-slate-50 pb-4 mb-4">
                 <div>
@@ -696,14 +1108,82 @@ Audit this decision and provide a plain-English explanation that a 16-year-old c
 
                   {result.flaggedAttributes && result.flaggedAttributes.length > 0 && (
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-450 tracking-wider">Identified Proxies</span>
+                      <span className="text-[10px] font-bold uppercase text-slate-455 tracking-wider">Identified Proxies</span>
                       <div className="flex flex-wrap gap-1.5 mt-2">
-                        {result.flaggedAttributes.map((attr, idx) => (
-                          <span key={idx} className="px-2 py-1 bg-red-50 text-red-705 border border-red-100 text-[10px] font-bold rounded-lg">{attr}</span>
-                        ))}
+                        {result.flaggedAttributes.map((attr, idx) => {
+                          const isAttrVisible = revealStage === 'complete' || idx < visibleFlaggedCount;
+                          return (
+                            <span 
+                              key={idx} 
+                              className={`px-2 py-1 bg-red-50 text-red-700 border border-red-100 text-[10px] font-bold rounded-lg transition-all duration-300 transform ${
+                                isAttrVisible ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-1 scale-95 pointer-events-none'
+                              }`}
+                            >
+                              {attr}
+                            </span>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
+
+                  {/* Dynamic Bias DNA helix (Visual Metaphor) */}
+                  {(() => {
+                    const flagged = result.flaggedAttributes || [];
+                    const dnaAttributes: DnaAttribute[] = [
+                      { 
+                        name: "Gender / Identity Markers", 
+                        isBiased: flagged.some(f => f.toLowerCase().includes('gender') || f.toLowerCase().includes('sex')), 
+                        correlation: flagged.some(f => f.toLowerCase().includes('gender') || f.toLowerCase().includes('sex')) ? 73 : 6, 
+                        description: "Direct pronouns or explicit gender fields leak identity context into neural network weights.",
+                        mutatingPower: flagged.some(f => f.toLowerCase().includes('gender') || f.toLowerCase().includes('sex')) ? 'CRITICAL' : 'NONE'
+                      },
+                      { 
+                        name: "Postal Zip Code redlining", 
+                        isBiased: flagged.some(f => f.toLowerCase().includes('zip') || f.toLowerCase().includes('address') || f.toLowerCase().includes('location') || f.toLowerCase().includes('code')), 
+                        correlation: flagged.some(f => f.toLowerCase().includes('zip') || f.toLowerCase().includes('address') || f.toLowerCase().includes('location') || f.toLowerCase().includes('code')) ? 64 : 8, 
+                        description: "Replicates geographical racial and wealth disparities historically. Extremely high proxy risk.",
+                        mutatingPower: flagged.some(f => f.toLowerCase().includes('zip') || f.toLowerCase().includes('address') || f.toLowerCase().includes('location') || f.toLowerCase().includes('code')) ? 'HIGH' : 'NONE'
+                      },
+                      { 
+                        name: "Race / Origin Indicators", 
+                        isBiased: flagged.some(f => f.toLowerCase().includes('race') || f.toLowerCase().includes('ethnic') || f.toLowerCase().includes('origin')), 
+                        correlation: flagged.some(f => f.toLowerCase().includes('race') || f.toLowerCase().includes('ethnic') || f.toLowerCase().includes('origin')) ? 80 : 5, 
+                        description: "Direct protection coordinates that violate civil equity and compliance frameworks.",
+                        mutatingPower: flagged.some(f => f.toLowerCase().includes('race') || f.toLowerCase().includes('ethnic') || f.toLowerCase().includes('origin')) ? 'CRITICAL' : 'NONE'
+                      },
+                      { 
+                        name: "Age / Experience Ratios", 
+                        isBiased: flagged.some(f => f.toLowerCase().includes('age') || f.toLowerCase().includes('year')), 
+                        correlation: flagged.some(f => f.toLowerCase().includes('age') || f.toLowerCase().includes('year')) ? 52 : 12, 
+                        description: "Chronological parameters that index applicants or customers as high risks due to age profiling.",
+                        mutatingPower: flagged.some(f => f.toLowerCase().includes('age') || f.toLowerCase().includes('year')) ? 'HIGH' : 'NONE'
+                      },
+                      { 
+                        name: "Validated Merit Parameters", 
+                        isBiased: false, 
+                        correlation: 6, 
+                        description: "Verified financial credit history or objective qualifications. Stable and balanced.",
+                        mutatingPower: 'NONE'
+                      },
+                      { 
+                        name: "Clean Activity Log Index", 
+                        isBiased: false, 
+                        correlation: 4, 
+                        description: "No bias correlations detected. Safely classified.",
+                        mutatingPower: 'NONE'
+                      }
+                    ];
+                    return (
+                      <div className="pt-4 border-t border-slate-100">
+                        <BiasDna 
+                          attributes={dnaAttributes} 
+                          title="Decision Node DNA Mapping" 
+                          subtitle="Analyzing systemic protected class mutations deeply embedded within this individual decision path."
+                        />
+                      </div>
+                    );
+                  })()}
 
                   {/* Recommendations */}
                   <div>
@@ -740,6 +1220,137 @@ Audit this decision and provide a plain-English explanation that a 16-year-old c
                 </div>
               )}
 
+              {/* Real-World Impact Estimator Section */}
+              {(() => {
+                const VOLUME_VALUES = [100, 1000, 10000, 100000, 1000000];
+                const VOLUME_LABELS = ['100', '1,000', '10,000', '100,000', '1M+'];
+                const currentVolume = VOLUME_VALUES[volumeIndex];
+                
+                const biasExposureRatio = decisionType === 'loan' ? 0.31 : decisionType === 'job' ? 0.24 : decisionType === 'medical' ? 0.18 : 0.22;
+                const rawRejections = Math.round(currentVolume * (displayedScore / 100) * biasExposureRatio);
+                const unfairRejections = displayedScore > 0 ? Math.max(1, rawRejections) : 0;
+
+                const hasRaceFlag = result?.flaggedAttributes?.some(f => f.toLowerCase().includes('race') || f.toLowerCase().includes('ethnic')) || 
+                                    (compareResult?.attribute_changed?.toLowerCase().includes('race') || compareResult?.attribute_changed?.toLowerCase().includes('ethnic'));
+                const hasZipFlag = result?.flaggedAttributes?.some(f => f.toLowerCase().includes('zip') || f.toLowerCase().includes('location')) || 
+                                    (compareResult?.attribute_changed?.toLowerCase().includes('zip') || compareResult?.attribute_changed?.toLowerCase().includes('location'));
+                const minorityPct = Math.min(95, Math.max(35, Math.round(45 + (displayedScore / 100) * 20 + (hasRaceFlag ? 15 : 0) + (hasZipFlag ? 8 : 0))));
+
+                const costMultiplierLow = decisionType === 'loan' ? 770 : decisionType === 'job' ? 550 : decisionType === 'medical' ? 1150 : 350;
+                const costMultiplierHigh = decisionType === 'loan' ? 2880 : decisionType === 'job' ? 2100 : decisionType === 'medical' ? 4300 : 1400;
+
+                const scaleDampening = unfairRejections > 0 ? (Math.pow(unfairRejections, 0.95) / unfairRejections) : 1;
+                const lowCost = Math.round(unfairRejections * costMultiplierLow * scaleDampening);
+                const highCost = Math.round(unfairRejections * costMultiplierHigh * scaleDampening);
+
+                const formatCurrency = (val: number) => {
+                  if (val === 0) return '$0';
+                  if (val >= 1000000) {
+                    return `$${(val / 1000000).toFixed(1).replace(/\.0$/, '')}M`;
+                  }
+                  if (val >= 1000) {
+                    return `$${(val / 1000).toFixed(0)}K`;
+                  }
+                  return `$${val}`;
+                };
+
+                return (
+                  <div className="border-t border-slate-100 pt-6 mt-6">
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <span className="block text-[10px] uppercase font-black text-indigo-500 tracking-wider">⚡ High-Exposure Impact Estimator</span>
+                        <h4 className="text-sm font-black text-slate-800 mt-0.5">Translate Statistical Bias into Real Liability</h4>
+                      </div>
+                      <span className="text-[10px] font-mono bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold">
+                        Disparity Risk Model
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-slate-500 leading-relaxed mb-4">
+                      Algorithmic bias is more than a metric. It reflects systemic exclusion and direct legal exposure. Set your annual decision volume to calculate your estimated compliance profile.
+                    </p>
+
+                    {/* Ask User for Decision Volume */}
+                    <div className="bg-slate-50 border border-slate-100 rounded-xl p-4 mb-4">
+                      <div className="flex justify-between items-center mb-2">
+                        <label className="text-xs font-black text-slate-600 uppercase tracking-wide">
+                          How many decisions does your system make per year?
+                        </label>
+                        <span className="text-sm font-black text-indigo-600 bg-white px-2 py-0.5 border border-slate-200/60 rounded">
+                          {VOLUME_LABELS[volumeIndex]} / yr
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <input
+                          type="range"
+                          min="0"
+                          max="4"
+                          step="1"
+                          value={volumeIndex}
+                          onChange={(e) => setVolumeIndex(parseInt(e.target.value, 10))}
+                          className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600 focus:outline-none"
+                        />
+                      </div>
+                      <div className="flex justify-between text-[10px] text-slate-400 font-bold mt-2">
+                        <span>100</span>
+                        <span>1,000</span>
+                        <span>10,000</span>
+                        <span>100,000</span>
+                        <span>1M+</span>
+                      </div>
+                    </div>
+
+                    {/* Metrics Panel */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                      <div className="bg-red-50/40 border border-red-100 rounded-xl p-3.5 flex flex-col justify-between">
+                        <span className="text-[9px] uppercase font-black text-slate-450">Candidate Rejection Rate</span>
+                        <div className="mt-2 text-lg font-black text-red-700">
+                          ~{unfairRejections.toLocaleString()} <span className="text-xs font-bold text-slate-500 block">qualified applicants</span>
+                        </div>
+                        <p className="text-[10px] font-semibold text-slate-500 mt-1.5">
+                          estimated to be unfairly rejected or down-ranked due to proxy attributes.
+                        </p>
+                      </div>
+
+                      <div className="bg-slate-50/60 border border-slate-100 rounded-xl p-3.5 flex flex-col justify-between">
+                        <span className="text-[9px] uppercase font-black text-slate-455">Demographic Disparity</span>
+                        <div className="mt-2 text-lg font-black text-slate-700">
+                          ~{minorityPct}% <span className="text-xs font-bold text-slate-500 block">of rejections</span>
+                        </div>
+                        <p className="text-[10px] font-semibold text-slate-550 mt-1.5">
+                          will belong to protected minority or underrepresented classifications.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Legal liability estimation bar */}
+                    <div className="bg-slate-900 text-white rounded-xl p-4 border border-slate-800 shadow-md">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[9px] uppercase font-black text-slate-450 tracking-wider">Estimated Legal Liability</span>
+                        <span className="text-[10px] bg-red-500/10 text-red-400 px-2 py-0.5 rounded font-black border border-red-500/20">Class Action Risk</span>
+                      </div>
+                      <div className="text-2xl font-black tracking-tight text-red-400">
+                        {formatCurrency(lowCost)} – {formatCurrency(highCost)}
+                      </div>
+                      <p className="text-[10px] text-slate-450 font-semibold leading-relaxed mt-2.5 border-t border-slate-800 pt-2 h-auto text-slate-400">
+                        {decisionType === 'loan' && (
+                          <span>High correlation with federal redlining regulations (US Equal Credit Opportunity Act - ECOA). Local zip code proxies risk severe supervisory action and class-wide civil penalties.</span>
+                        )}
+                        {decisionType === 'job' && (
+                          <span>EEOC compliance exposure category: Disparate Impact under Title VII. Class-action vulnerability score remains highly elevated based on subjective evaluations.</span>
+                        )}
+                        {decisionType === 'medical' && (
+                          <span>ACA Section 1557 non-discrimination violation risk. Clinical proxy bias may trigger active regulatory audits and severe statutory healthcare validation penalty assessments.</span>
+                        )}
+                        {decisionType === 'other' && (
+                          <span>General automated profiling non-compliance risk under GDPR Article 22 & FTC deceptive practice practice standards. Remediate modeling weights to mitigate systemic exposure.</span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* FEATURE 12: Compliance checks */}
               <div className="border-t border-slate-100 pt-6 mt-6">
                 <span className="block text-[10px] uppercase font-black text-slate-400 tracking-wider mb-3">Regulatory Compliance validations</span>
@@ -762,6 +1373,8 @@ Audit this decision and provide a plain-English explanation that a 16-year-old c
               </div>
 
             </div>
+          )}
+          </>
           )}
 
         </div>
